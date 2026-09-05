@@ -1,0 +1,12 @@
+[[pages]]
+path = "app.py"
+name = "Inicio"
+
+[[pages]]
+path = "pages/1_Exploracion.py"
+name = "Exploración"
+
+[[pages]]
+path = "pages/2_Analisis.py"
+name = "Análisis"
+

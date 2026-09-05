@@ -11,19 +11,9 @@ def inicializar_gee():
         client_secret = os.getenv('EE_CLIENT_SECRET') or os.getenv('CLIENT_SECRET')
         refresh_token = os.getenv('EE_REFRESH_TOKEN') or os.getenv('REFRESH_TOKEN')
 
-        print("=== CREDENCIALES GEE ===")
-        print(
-            "CLIENT_ID:",
-            "✓ OK" if client_id else "✗ FALTA"
-        )
-        print(
-            "CLIENT_SECRET:",
-            "✓ OK" if client_secret else "✗ FALTA"
-        )
-        print(
-            "REFRESH_TOKEN:",
-            "✓ OK" if refresh_token else "✗ FALTA"
-        )
+        st.write("CLIENT_ID:", "✓ OK" if client_id else "✗ FALTA")
+        st.write("CLIENT_SECRET:", "✓ OK" if client_secret else "✗ FALTA")
+        st.write("REFRESH_TOKEN:", "✓ OK" if refresh_token else "✗ FALTA")
 
         if client_id and client_secret and refresh_token:
             credentials = {

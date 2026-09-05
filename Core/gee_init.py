@@ -6,6 +6,7 @@ import streamlit as st
 def inicializar_gee():
     """Inicializa Google Earth Engine con credenciales OAuth2"""
     try:
+        st.write("🔍 Ejecutando inicializar_gee()")
         client_id = os.getenv('EE_CLIENT_ID') or os.getenv('CLIENT_ID')
         client_secret = os.getenv('EE_CLIENT_SECRET') or os.getenv('CLIENT_SECRET')
         refresh_token = os.getenv('EE_REFRESH_TOKEN') or os.getenv('REFRESH_TOKEN')
@@ -23,7 +24,7 @@ def inicializar_gee():
             "REFRESH_TOKEN:",
             "✓ OK" if refresh_token else "✗ FALTA"
         )
-        
+
         if client_id and client_secret and refresh_token:
             credentials = {
                 "client_id": client_id,

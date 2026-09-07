@@ -1,3 +1,5 @@
+import ee
+
 INDICES = {
     "NDVI":  lambda img: img.normalizedDifference(["NIR", "RED"]),
 
@@ -38,3 +40,10 @@ def calcular_indice(img, nombre):
     if nombre not in INDICES:
         raise ValueError(f"Índice no soportado: {nombre}")
     return INDICES[nombre](img)
+
+
+def calcular_todos_indices(img):
+    """Calcula los 7 índices espectrales y los combina como bandas de una sola imagen."""
+    bandas = [INDICES[nombre](img).rename(nombre) for nombre in INDICES]
+    return ee.Image.cat(bandas)
+

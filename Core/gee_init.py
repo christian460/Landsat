@@ -34,7 +34,7 @@ def obtener_zona_estudio():
     """Obtiene la geometría de la zona de estudio desde GEE"""
     try:
         return ee.FeatureCollection(
-            "projects/fourth-return-458106-r5/assets/uchumayo"
+            "projects/landsat-aguas/assets/uchumayo"
         ).geometry()
     except Exception as e:
         raise RuntimeError(f"Error al cargar zona de estudio: {e}")

@@ -24,7 +24,7 @@ def inicializar_gee():
             with open(os.path.join(cred_dir, "credentials"), "w") as f:
                 json.dump(credentials, f)
 
-        ee.Initialize(project="fourth-return-458106-r5")
+        ee.Initialize(project="landsat-aguas")
 
     except Exception as e:
         raise RuntimeError(f"Error inicializando GEE: {e}")

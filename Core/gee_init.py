@@ -1,33 +1,63 @@
-import ee
 import os
-import json
 import streamlit as st
+import ee
+from google.oauth2.credentials import Credentials
+
 
 def inicializar_gee():
-    """Inicializa Google Earth Engine con credenciales OAuth2"""
+    """Inicializa Google Earth Engine con credenciales OAuth2."""
     try:
-        client_id = os.getenv('EE_CLIENT_ID') or os.getenv('CLIENT_ID')
-        client_secret = os.getenv('EE_CLIENT_SECRET') or os.getenv('CLIENT_SECRET')
-        refresh_token = os.getenv('EE_REFRESH_TOKEN') or os.getenv('REFRESH_TOKEN')
+        # Obtener credenciales desde Streamlit Secrets
+        client_id = (
+            os.getenv("EE_CLIENT_ID")
+            or os.getenv("CLIENT_ID")
+            or st.secrets["EE_CLIENT_ID"]
+        )
 
-        if client_id and client_secret and refresh_token:
-            credentials = {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "refresh_token": refresh_token,
-                "type": "authorized_user"
-            }
+        client_secret = (
+            os.getenv("EE_CLIENT_SECRET")
+            or os.getenv("CLIENT_SECRET")
+            or st.secrets["EE_CLIENT_SECRET"]
+        )
 
-            cred_dir = os.path.join(os.path.expanduser("~"), ".config", "earthengine")
-            os.makedirs(cred_dir, exist_ok=True)
+        refresh_token = (
+            os.getenv("EE_REFRESH_TOKEN")
+            or os.getenv("REFRESH_TOKEN")
+            or st.secrets["EE_REFRESH_TOKEN"]
+        )
 
-            with open(os.path.join(cred_dir, "credentials"), "w") as f:
-                json.dump(credentials, f)
+        # Proyecto de Google Cloud / Earth Engine
+        project = st.secrets.get("EE_PROJECT", "landsat-aguas")
 
-        ee.Initialize(project="landsat-aguas")
+        if not client_id or not client_secret or not refresh_token:
+            raise RuntimeError(
+                "Faltan credenciales OAuth2 de Earth Engine."
+            )
+
+        # Crear credenciales OAuth2 directamente
+        credentials = Credentials(
+            token=None,
+            refresh_token=refresh_token,
+            client_id=client_id,
+            client_secret=client_secret,
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=[
+                "https://www.googleapis.com/auth/earthengine"
+            ]
+        )
+
+        # Inicializar Earth Engine usando explícitamente
+        # las credenciales OAuth2
+        ee.Initialize(
+            credentials=credentials,
+            project=project,
+            opt_url="https://earthengine.googleapis.com"
+        )
 
     except Exception as e:
-        raise RuntimeError(f"Error inicializando GEE: {e}")
+        raise RuntimeError(
+            f"Error inicializando GEE: {e}"
+        )
 
 
 def obtener_zona_estudio():

@@ -5,40 +5,36 @@ import json
 
 
 def inicializar_gee():
-    """Inicializa Google Earth Engine usando credenciales locales o OAuth2."""
+    """Inicializa Google Earth Engine usando credenciales locales, variables de entorno o Streamlit Secrets."""
+    project = "landsat-aguas"
+
+    # 1. Intentar primero las credenciales locales existentes de la máquina/servidor
+    try:
+        ee.Initialize(project=project)
+        return
+    except Exception:
+        pass  # Si falla, procedemos a buscar credenciales explícitas
 
     try:
-        project = "landsat-aguas"
+        # Función auxiliar para buscar en entorno o en Streamlit Secrets de forma segura
+        def buscar_credencial(key_env, key_alt):
+            # 1. Buscar en variables de entorno de la máquina
+            valor = os.getenv(key_env) or os.getenv(key_alt)
+            if valor:
+                return valor
+            
+            # 2. Si no está en el entorno, buscar en Streamlit Secrets de forma segura
+            try:
+                return st.secrets.get(key_env) or st.secrets.get(key_alt)
+            except Exception:
+                return None
 
-        # 1. Intentar primero las credenciales locales existentes
-        try:
-            ee.Initialize(project=project)
-            return
-        except Exception:
-            pass
+        # Obtener las credenciales con prioridad: Variables Entorno > Streamlit Secrets
+        client_id = buscar_credencial("EE_CLIENT_ID", "CLIENT_ID")
+        client_secret = buscar_credencial("EE_CLIENT_SECRET", "CLIENT_SECRET")
+        refresh_token = buscar_credencial("EE_REFRESH_TOKEN", "REFRESH_TOKEN")
 
-        # 2. Si no funcionan, intentar OAuth2 mediante variables de entorno
-        client_id = (
-            os.getenv("EE_CLIENT_ID")
-            or os.getenv("CLIENT_ID")
-        )
-
-        client_secret = (
-            os.getenv("EE_CLIENT_SECRET")
-            or os.getenv("CLIENT_SECRET")
-        )
-
-        refresh_token = (
-            os.getenv("EE_REFRESH_TOKEN")
-            or os.getenv("REFRESH_TOKEN")
-        )
-
-        # 3. Si no existen variables, intentar Streamlit Secrets
-        if not all([client_id, client_secret, refresh_token]):
-            client_id = st.secrets.get("EE_CLIENT_ID")
-            client_secret = st.secrets.get("EE_CLIENT_SECRET")
-            refresh_token = st.secrets.get("EE_REFRESH_TOKEN")
-
+        # 2. Si tenemos las tres piezas, creamos el archivo de configuración de GEE
         if client_id and client_secret and refresh_token:
             credentials = {
                 "client_id": client_id,
@@ -47,12 +43,7 @@ def inicializar_gee():
                 "type": "authorized_user"
             }
 
-            cred_dir = os.path.join(
-                os.path.expanduser("~"),
-                ".config",
-                "earthengine"
-            )
-
+            cred_dir = os.path.join(os.path.expanduser("~"), ".config", "earthengine")
             os.makedirs(cred_dir, exist_ok=True)
 
             with open(os.path.join(cred_dir, "credentials"), "w") as f:
@@ -61,10 +52,10 @@ def inicializar_gee():
             ee.Initialize(project=project)
             return
 
-        raise RuntimeError("No se encontraron credenciales de Google Earth Engine.")
+        raise RuntimeError("No se encontraron credenciales válidas en el entorno ni en Secrets.")
 
     except Exception as e:
-        raise RuntimeError(f"Error inicializando GEE: {e}")
+        raise RuntimeError(f"Error inicializando GEE: {e}")     
 
 
 def obtener_zona_estudio():

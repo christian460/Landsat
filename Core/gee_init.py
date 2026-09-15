@@ -1,7 +1,28 @@
-import ee
-import os
 import json
+import os
+
+import ee
 import streamlit as st
+
+
+# ============================================================
+# CONFIGURACIÓN DE GEE
+# ============================================================
+
+PROJECT_ID = "landsat-aguas"
+
+ASSET_ZONA_ESTUDIO = (
+    "projects/landsat-aguas/assets/uchumayo"
+)
+
+ASSET_RIO_CHILI = (
+    "projects/landsat-aguas/assets/rio_chili_uchumayo"
+)
+
+
+# ============================================================
+# INICIALIZACIÓN DE GOOGLE EARTH ENGINE
+# ============================================================
 
 def inicializar_gee():
     """Inicializa Google Earth Engine usando credenciales locales o OAuth2."""
@@ -67,27 +88,49 @@ def inicializar_gee():
 
 
 
+# ============================================================
+# ZONA DE ESTUDIO
+# ============================================================
+
+@st.cache_resource
 def obtener_zona_estudio():
-    """Obtiene la geometría de la zona de estudio desde GEE"""
-    try:
-        return ee.FeatureCollection(
-            "projects/landsat-aguas/assets/uchumayo"
-        ).geometry()
-    except Exception as e:
-        raise RuntimeError(f"Error al cargar zona de estudio: {e}")
+    """Carga el asset de la zona de estudio de Uchumayo."""
+
+    return ee.FeatureCollection(
+        ASSET_ZONA_ESTUDIO
+    )
 
 
 def asegurar_zona_estudio():
-    """
-    Asegura que la zona de estudio esté cargada en session_state.
-    Llama a esta función al inicio de cada página de Streamlit.
-    """
+    """Obtiene la zona de estudio desde session_state o GEE."""
+
     if "zona_estudio" not in st.session_state:
-        try:
-            inicializar_gee()
-            st.session_state["zona_estudio"] = obtener_zona_estudio()
-        except Exception as e:
-            st.error(f"Error al inicializar el sistema: {str(e)}")
-            st.stop()
+        st.session_state["zona_estudio"] = (
+            obtener_zona_estudio()
+        )
 
     return st.session_state["zona_estudio"]
+
+
+# ============================================================
+# RÍO CHILI
+# ============================================================
+
+@st.cache_resource
+def obtener_rio_chili():
+    """Carga el asset correspondiente al Río Chili."""
+
+    return ee.FeatureCollection(
+        ASSET_RIO_CHILI
+    )
+
+
+def asegurar_rio_chili():
+    """Obtiene el Río Chili desde session_state o GEE."""
+
+    if "rio_chili" not in st.session_state:
+        st.session_state["rio_chili"] = (
+            obtener_rio_chili()
+        )
+
+    return st.session_state["rio_chili"]

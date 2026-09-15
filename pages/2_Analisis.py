@@ -1,18 +1,18 @@
-import ee
 import folium
 import plotly.graph_objects as go
 import streamlit as st
 from streamlit_folium import st_folium
 
 from Core.datos import estadisticas_indice, obtener_indice, serie_temporal
-from Core.gee_init import asegurar_zona_estudio
+from Core.gee_init import asegurar_zona_estudio, asegurar_rio_chili
 from Core.indices import INDICES, VIS_PARAMS
 
 # ── Contexto ─────────────────────────────────────────────────────────────────
 zona_estudio = asegurar_zona_estudio()
+rio_chili = asegurar_rio_chili()
 
 # ── Interfaz – sidebar ───────────────────────────────────────────────────────
-st.title("Análisis Multitemporal – Índices Landsat")
+st.title("Análisis Multitemporal – Calidad del Agua")
 
 with st.sidebar:
     indice = st.selectbox("Índice espectral", list(INDICES.keys()))
@@ -50,9 +50,9 @@ with tab_mapas:
 
             stats = estadisticas_indice(anio, indice)
             st.markdown(
-                f"**Promedio:** {stats[indice+'_mean']:.3f}  \n"
-                f"**Mínimo:** {stats[indice+'_min']:.3f}  \n"
-                f"**Máximo:** {stats[indice+'_max']:.3f}"
+                f"**Promedio:** {stats['mean']:.3f}  \n"
+                f"**Mínimo:** {stats['min']:.3f}  \n"
+                f"**Máximo:** {stats['max']:.3f}"
             )
 
     st.divider()

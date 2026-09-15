@@ -2,9 +2,18 @@ import ee
 import streamlit as st
 import pandas as pd
 
-from Core.gee_init import asegurar_zona_estudio
+from Core.gee_init import asegurar_zona_estudio, asegurar_rio_chili
 from Core.indices import INDICES, calcular_todos_indices
 
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+CLOUD_COVER_MAX = 20
+
+BUFFER_RIO_METROS = 150
+
+ESCALA_LANDSAT = 30
 
 # ── Selector de colección según año ─────────────────────────────────────────
 
@@ -25,28 +34,65 @@ def _coleccion_y_bandas(anio: int):
         ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"],
     )
 
+# ============================================================
+# GEOMETRÍA DEL RÍO
+# ============================================================
 
-# ── Imagen base anual ────────────────────────────────────────────────────────
+@st.cache_resource
+def _geometria_rio():
+    rio_chili = asegurar_rio_chili()
+
+    return rio_chili.geometry().buffer(BUFFER_RIO_METROS)
+
+# ============================================================
+# IMAGEN BASE LANDSAT
+# ============================================================
 
 @st.cache_data(show_spinner=False)
 def _imagen_base(anio: int):
-    """Construye y almacena en caché la imagen base Landsat procesada para un año."""
-    zona_estudio = asegurar_zona_estudio()
+    geometria_rio = _geometria_rio()
     coleccion, bandas_origen = _coleccion_y_bandas(anio)
 
-    return (
+    imagen = (
         coleccion
-        .filterDate(f"{anio}-01-01", f"{anio}-12-31")
-        .filterBounds(zona_estudio)
-        .filter(ee.Filter.lt("CLOUD_COVER", 20))
+        .filterDate(
+            f"{anio}-01-01",
+            f"{anio}-12-31"
+        )
+        .filterBounds(
+            geometria_rio
+        )
+        .filter(
+            ee.Filter.lt(
+                "CLOUD_COVER",
+                CLOUD_COVER_MAX
+            )
+        )
         .median()
-        .select(bandas_origen)
-        .rename(["BLUE", "GREEN", "RED", "NIR", "SWIR1", "SWIR2"])
-        .clip(zona_estudio)
+        .select(
+            bandas_origen
+        )
+        .rename(
+            [
+                "BLUE",
+                "GREEN",
+                "RED",
+                "NIR",
+                "SWIR1",
+                "SWIR2",
+            ]
+        )
+        .clip(
+            geometria_rio
+        )
     )
 
+    return imagen
 
-# ── Imagen multibanda de los 7 índices ──────────────────────────────────────
+
+# ============================================================
+# IMAGEN MULTIBANDA DE ÍNDICES
+# ============================================================
 
 @st.cache_data(show_spinner=False)
 def _imagen_indices(anio: int):
@@ -55,83 +101,209 @@ def _imagen_indices(anio: int):
     return calcular_todos_indices(imagen)
 
 
-# ── Imagen de un índice para un año ─────────────────────────────────────────
+# ============================================================
+# OBTENER UN ÍNDICE
+# ============================================================
 
 @st.cache_data(show_spinner=False)
 def obtener_indice(anio: int, indice: str):
     """Obtiene la imagen de un índice espectral reutilizando la imagen multibanda anual."""
     return _imagen_indices(anio).select(indice)
 
+# ============================================================
+# MÁSCARA DE AGUA
+# ============================================================
 
-# ── Estadísticas agrupadas de los 7 índices para un año ──────────────────────
+@st.cache_data(show_spinner=False)
+def obtener_mascara_agua(
+    anio: int,
+    indice: str = "MNDWI",
+    umbral: float = 0.0
+):
+
+    imagen = obtener_indice(
+        anio,
+        indice
+    )
+
+    mascara = (
+        imagen
+        .gt(umbral)
+        .rename("water_mask")
+    )
+
+    return mascara
+
+# ============================================================
+# ESTADÍSTICAS DE TODOS LOS ÍNDICES
+# ============================================================
 
 @st.cache_data(show_spinner=False)
 def estadisticas_todos_indices(anio: int):
-    """Calcula las estadísticas para los 7 índices en una sola operación reduceRegion."""
-    zona_estudio = asegurar_zona_estudio()
-    img_indices = _imagen_indices(anio)
+    geometria_rio = _geometria_rio()
+    imagen = _imagen_indices(anio)
 
-    stats = img_indices.reduceRegion(
+    estadisticas = imagen.reduceRegion(
         reducer=(
             ee.Reducer.mean()
-            .combine(ee.Reducer.min(), "", True)
-            .combine(ee.Reducer.max(), "", True)
+            .combine(
+                ee.Reducer.min(),
+                "",
+                True
+            )
+            .combine(
+                ee.Reducer.max(),
+                "",
+                True
+            )
         ),
-        geometry=zona_estudio,
-        scale=30,
+        geometry=geometria_rio,
+        scale=ESCALA_LANDSAT,
         maxPixels=1e9,
     )
-    return stats.getInfo()
 
+    return estadisticas.getInfo()
+    
+# ============================================================
+# ESTADÍSTICAS DE UN ÍNDICE
+# ============================================================
 
 @st.cache_data(show_spinner=False)
-def estadisticas_indice(anio: int, indice: str):
-    """Calcula o recupera del caché las estadísticas para un índice en un año dado."""
-    return estadisticas_todos_indices(anio)
+def estadisticas_indice(
+    anio: int,
+    indice: str
+):
+    """
+    Devuelve las estadísticas del índice solicitado.
 
+    Se reutiliza el cálculo conjunto de todos los índices.
+    """
 
-# ── Serie temporal unificada ──────────────────────────────────────────────────
+    datos = estadisticas_todos_indices(
+        anio
+    )
+
+    return {
+        "mean": datos.get(
+            f"{indice}_mean"
+        ),
+        "min": datos.get(
+            f"{indice}_min"
+        ),
+        "max": datos.get(
+            f"{indice}_max"
+        ),
+    }
+
+# ============================================================
+# ÁREA DE AGUA
+# ============================================================
+
+@st.cache_data(show_spinner=False)
+def area_agua(anio: int, indice: str = "MNDWI", umbral: float = 0.0):
+    geometria_rio = _geometria_rio()
+
+    mascara = obtener_mascara_agua(
+        anio,
+        indice,
+        umbral
+    )
+
+    area = (
+        mascara
+        .selfMask()
+        .multiply(
+            ee.Image.pixelArea()
+        )
+        .reduceRegion(
+            reducer=ee.Reducer.sum(),
+            geometry=geometria_rio,
+            scale=ESCALA_LANDSAT,
+            maxPixels=1e9,
+        )
+    )
+
+    resultado = area.getInfo()
+
+    if not resultado:
+        return 0.0
+
+    area_m2 = resultado.get("water_mask", 0)
+
+    if area_m2 is None:
+        return 0.0
+
+    return area_m2 / 1_000_000
+
+# ============================================================
+# SERIE TEMPORAL DE TODOS LOS ÍNDICES
+# ============================================================
 
 @st.cache_data(show_spinner=False)
 def _serie_temporal_todos(inicio: int = 2000, fin: int = 2025):
-    """Calcula la serie temporal de los 7 índices en una sola llamada GEE."""
-    zona_estudio = asegurar_zona_estudio()
+    geometria_rio = _geometria_rio()
 
     def reducir_anio(anio: int):
-        img_indices = _imagen_indices(anio)
-        red = img_indices.reduceRegion(
+        imagen = _imagen_indices(
+            anio
+        )
+
+        estadisticas = imagen.reduceRegion(
             reducer=ee.Reducer.mean(),
-            geometry=zona_estudio,
-            scale=30,
+            geometry=geometria_rio,
+            scale=ESCALA_LANDSAT,
             maxPixels=1e9,
         )
-        return ee.Feature(None, red.set("Año", anio))
 
-    fc = ee.FeatureCollection([reducir_anio(a) for a in range(inicio, fin + 1)])
-    features = fc.getInfo()["features"]
+        return ee.Feature(None,estadisticas.set("Año",anio))
 
-    res = {}
-    for f in features:
-        props = f["properties"]
-        anio = int(props["Año"])
-        res[anio] = props
-    return res
+    features = [reducir_anio(anio) for anio in range(inicio,fin + 1)]
+
+    coleccion = ee.FeatureCollection(features)
+
+    datos = coleccion.getInfo()
+
+    resultado = {}
+
+    for feature in datos["features"]:
+        propiedades = feature["properties"]
+        anio = int(propiedades["Año"])
+
+        resultado[anio] = propiedades
+
+    return resultado
 
 
 @st.cache_data(show_spinner=False)
 def serie_temporal(indice: str, inicio: int = 2000, fin: int = 2025):
     """Calcula la serie temporal de un índice reutilizando los datos multitemporales de todos los índices."""
-    datos_completos = _serie_temporal_todos(inicio, fin)
+    datos = _serie_temporal_todos(inicio, fin)
     return [
         {
             "Año": anio,
-            "Valor": datos_completos.get(anio, {}).get(indice),
+            "Valor": datos.get(anio, {}).get(indice),
         }
         for anio in range(inicio, fin + 1)
     ]
 
+# ============================================================
+# SERIE TEMPORAL DEL ÁREA DE AGUA
+# ============================================================
 
-# ── Tabla de puntos de muestreo desde Google Sheets ─────────────────────────
+@st.cache_data(show_spinner=False)
+def serie_area_agua(inicio: int = 2000,fin: int = 2025,indice: str = "MNDWI",umbral: float = 0.0):
+    return [
+        {
+            "Año": anio,
+            "Área_km2": area_agua(anio,indice,umbral),
+        }
+        for anio in range(inicio,fin + 1)
+    ]
+
+
+# ============================================================
+# DATOS DE MUESTREO
+# ============================================================
 
 _URL_SHEETS = (
     "https://docs.google.com/spreadsheets/d/"

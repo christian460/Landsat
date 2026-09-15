@@ -7,11 +7,12 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from Core.datos import cargar_tabla_muestreo, obtener_indice
-from Core.gee_init import asegurar_zona_estudio
+from Core.gee_init import asegurar_zona_estudio, asegurar_rio_chili
 from Core.indices import INDICES, VIS_PARAMS
 
 # ── Contexto ─────────────────────────────────────────────────────────────────
 zona_estudio = asegurar_zona_estudio()
+rio_chili = asegurar_rio_chili()
 
 # ── Puntos de muestreo ───────────────────────────────────────────────────────
 PUNTOS = ee.FeatureCollection([
@@ -70,7 +71,7 @@ def agregar_puntos_muestreo(mapa, puntos, tabla_df):
 
 
 # ── Interfaz ─────────────────────────────────────────────────────────────────
-st.title("Exploración Espacial – Índice Espectral")
+st.title("Exploración Espacial – Calidad del Agua")
 
 with st.sidebar:
     indice   = st.selectbox("Índice espectral", list(INDICES.keys()))

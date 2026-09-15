@@ -1,3 +1,4 @@
+import ee
 import streamlit as st
 from Core.gee_init import inicializar_gee, obtener_zona_estudio, obtener_rio_chili
 

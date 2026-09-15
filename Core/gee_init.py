@@ -2,7 +2,6 @@ import os
 import streamlit as st
 import ee
 import json
-from google.oauth2.credentials import Credentials
 
 
 def inicializar_gee():

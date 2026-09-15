@@ -7,7 +7,7 @@ def inicializar_gee():
     """Inicializa Google Earth Engine usando credenciales locales o OAuth2."""
 
     try:
-        project = "fourth-return-458106-r5"
+        project = "Landsat-Aguas"
 
         # 1. Intentar primero las credenciales locales existentes
         try:

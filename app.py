@@ -30,7 +30,7 @@ if "rio_chili" not in st.session_state:
         st.session_state["rio_chili"] = obtener_rio_chili()
     except Exception as e:
         st.error(f"Error al cargar el río Chili: {str(e)}")
-        st.info("Verifica que el asset 'projects/landsat-aguas/assets/rio_chili' exista y sea accesible.")
+        st.info("Verifica que el asset 'projects/landsat-aguas/assets/rio_chili_uchumayo' exista y sea accesible.")
         st.stop()
 
 # ===============================
@@ -71,6 +71,7 @@ relacionados con la presencia y comportamiento del agua.
 - **LSWI** - Índice de Agua en Onda Corta
 - **NDWI** - Índice de Agua Normalizado
 - **MNDWI** - Índice de Agua Modificado
+- **AWEI** - Índice de Extracción de Agua Automatizado
 
 También permite visualizar:
 

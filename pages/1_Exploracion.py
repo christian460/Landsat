@@ -87,7 +87,7 @@ imagen       = obtener_indice(anio, indice)
 tiles        = imagen.getMapId(VIS_PARAMS[indice])
 
 # ── Mapa ─────────────────────────────────────────────────────────────────────
-mapa = folium.Map(location=[-16.42, -71.54], zoom_start=11, tiles="OpenStreetMap")
+mapa = folium.Map(location=[-16.435, -71.60], zoom_start=12, tiles="OpenStreetMap")
 
 folium.TileLayer(
     tiles=tiles["tile_fetcher"].url_format,

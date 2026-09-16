@@ -18,16 +18,16 @@ ESCALA_LANDSAT = 30
 # ── Selector de colección según año ─────────────────────────────────────────
 
 def _coleccion_y_bandas(anio: int):
-    if anio <= 2011:
-        return (
-            ee.ImageCollection("LANDSAT/LE07/C02/T1_L2"),
-            ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"],
-        )
-    if anio == 2012:
+    if anio <= 2012:
         col = ee.ImageCollection("LANDSAT/LT05/C02/T1_L2").merge(
             ee.ImageCollection("LANDSAT/LE07/C02/T1_L2")
         )
         return col, ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"]
+    if anio >= 2022:
+        col = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").merge(
+            ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+        )
+        return col, ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"]
 
     return (
         ee.ImageCollection("LANDSAT/LC08/C02/T1_L2"),
@@ -82,6 +82,8 @@ def _imagen_base(anio: int):
                 "SWIR2",
             ]
         )
+        .multiply(0.0000275)
+        .add(-0.2)
         .clip(
             geometria_rio
         )

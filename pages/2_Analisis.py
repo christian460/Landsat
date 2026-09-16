@@ -39,7 +39,7 @@ with tab_mapas:
             img   = obtener_indice(anio, indice)
             tiles = img.getMapId(VIS_PARAMS[indice])
 
-            mapa = folium.Map(location=[-16.42, -71.54], zoom_start=11, tiles="OpenStreetMap")
+            mapa = folium.Map(location=[-16.435, -71.60], zoom_start=12, tiles="OpenStreetMap")
             folium.TileLayer(
                 tiles=tiles["tile_fetcher"].url_format,
                 attr="Google Earth Engine",
@@ -119,7 +119,7 @@ with tab_graficos:
     }
     st.caption(
         "**Evolución temporal del índice espectral seleccionado. Permite identificar "
-        f"tendencias de degradación o recuperación del suelo en el área de estudio.**\n\n{MENSAJES_SERIES[indice]}"
+        f"tendencias de cambio en la respuesta espectral del Río Chili.**\n\n{MENSAJES_SERIES[indice]}"
     )
 
     st.divider()
@@ -180,7 +180,7 @@ with tab_graficos:
                  "los cuales pueden estar asociados a zonas con pérdida de agua, indicador de degradación. Y que claramente muestran valore que oscilan entre 0.015 y -0.020."
     }
     st.plotly_chart(fig2, use_container_width=True)
-    st.caption(f"**Valores atípicos que se desvían del comportamiento promedio. Pueden estar asociados a eventos ambientales extremos o cambios abruptos en el suelo.**\n\n {MENSAJES_ANOMALIAS[indice]}")
+    st.caption(f"**Valores atípicos que se desvían del comportamiento promedio histórico.**\n\n {MENSAJES_ANOMALIAS[indice]}")
     st.markdown(
         f"**Promedio histórico:** {media:.4f}  \n"
         f"**Desviación estándar:** {std:.4f}"

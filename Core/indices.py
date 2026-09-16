@@ -21,6 +21,15 @@ INDICES = {
     "LSWI":  lambda img: img.normalizedDifference(["NIR", "SWIR1"]),
     "NDWI":  lambda img: img.normalizedDifference(["GREEN", "NIR"]),
     "MNDWI": lambda img: img.normalizedDifference(["GREEN", "SWIR1"]),
+    "AWEI":  lambda img: img.expression(
+        "4 * (GREEN - SWIR1) - (0.25 * NIR + 2.75 * SWIR2)",
+        {
+            "GREEN": img.select("GREEN"),
+            "NIR":   img.select("NIR"),
+            "SWIR1": img.select("SWIR1"),
+            "SWIR2": img.select("SWIR2"),
+        },
+    ),
 }
 
 # ── Parámetros de visualización para folium / GEE ────────────────────────────
@@ -32,6 +41,7 @@ VIS_PARAMS = {
     "LSWI":  {"min": -0.5, "max": 0.8, "palette": ["brown", "white", "blue"]},
     "NDWI":  {"min": -0.5, "max": 0.8, "palette": ["white", "cyan", "blue"]},
     "MNDWI": {"min": -0.5, "max": 0.8, "palette": ["white", "lightblue", "darkblue"]},
+    "AWEI":  {"min": -1.5, "max": 0.5, "palette": ["white", "cyan", "darkblue"]},
 }
 
 

@@ -6,6 +6,7 @@ from streamlit_folium import st_folium
 from Core.datos import estadisticas_indice, obtener_indice, serie_temporal
 from Core.gee_init import asegurar_zona_estudio, asegurar_rio_chili
 from Core.indices import INDICES, VIS_PARAMS
+from Core.gee_init import inicializar_gee,asegurar_zona_estudio,asegurar_rio_chili
 
 # ── Contexto ─────────────────────────────────────────────────────────────────
 zona_estudio = asegurar_zona_estudio()

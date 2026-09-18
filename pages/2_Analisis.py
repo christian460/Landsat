@@ -82,6 +82,8 @@ with tab_mapas:
                 "en rango de centésimos negativos, ayuda a discriminar humedad, que influye en la descomposición y aporte de materia orgánica. Enfocado en agua superficial "
                 "y humedad del suelo. Útil para monitorear sequía agrícola y degradación por falta de agua.",
         "MNDWI": "Según la tendencia del valor de este índice vemos que a disminuido relativamente con el correr de los años, pero sin embargo es muy bajo estando en rango "
+                 "de decimos negativos, ayuda a identificar zonas con pérdida de agua, indicador de degradación.",
+        "AWEI": "Según la tendencia del valor de este índice vemos que a disminuido relativamente con el correr de los años, pero sin embargo es muy bajo estando en rango "
                  "de decimos negativos, ayuda a identificar zonas con pérdida de agua, indicador de degradación."
     }
     st.markdown(f"{MENSAJES_EVOLUCION[indice]}")
@@ -116,7 +118,9 @@ with tab_graficos:
         "NDWI": "Este gráfico representa la evolución temporal del índice espectral NDWI, donde observamos tendencias de disminución asociadas "
                 "a disminución de humedad de agua y procesos de sequía agrícola y degradación por falta de agua, esta entre valores de -0.06 a -0.11.",
         "MNDWI": "Este gráfico representa la evolución temporal del índice espectral MNDWI, donde observamos tendencias de mínima disminución asociadas "
-                 "a zonas con pérdida de agua, indicador de degradación, esta entre valores de -0.011 y -0.015."
+                 "a zonas con pérdida de agua, indicador de degradación, esta entre valores de -0.011 y -0.015.",
+        "AWEI": "Este gráfico representa la evolución temporal del índice espectral AWEI, donde observamos tendencias de mínima disminución asociadas "
+                 "a zonas con pérdida de agua, indicador de degradación, esta entre valores de -0.011 y -0.015.",    
     }
     st.caption(
         "**Evolución temporal del índice espectral seleccionado. Permite identificar "
@@ -178,7 +182,9 @@ with tab_graficos:
         "NDWI": "El siguiente gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro son los que sobrepasan "
                 "la desviación estándar), los cuales pueden estar asociados a eventos de riesgo de sequía agrícola y degradación por falta de agua. Y que claramente muestran valore que oscilan entre 0.015 y -0.025",
         "MNDWI": "El gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro son los que sobrepasan la desviación estándar), "
-                 "los cuales pueden estar asociados a zonas con pérdida de agua, indicador de degradación. Y que claramente muestran valore que oscilan entre 0.015 y -0.020."
+                 "los cuales pueden estar asociados a zonas con pérdida de agua, indicador de degradación. Y que claramente muestran valore que oscilan entre 0.015 y -0.020.",
+        "AWEI": "Este gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro son los que sobrepasan la desviación estándar), "
+                "los cuales pueden estar asociados a zonas con pérdida de agua, indicador de degradación. Y que claramente muestran valore que oscilan entre 0.015 y -0.020."
     }
     st.plotly_chart(fig2, use_container_width=True)
     st.caption(f"**Valores atípicos que se desvían del comportamiento promedio histórico.**\n\n {MENSAJES_ANOMALIAS[indice]}")

@@ -32,24 +32,32 @@ tab_mapas, tab_graficos = st.tabs(["Mapas y estadísticas", "Gráficos Analític
 # ── Tab 1 – Mapas ─────────────────────────────────────────────────────────────
 with tab_mapas:
     cols = st.columns(3)
-
-    for col, anio in zip(cols, anios_sel):
+    for i, (col, anio) in enumerate(zip(cols, anios_sel)):
         with col:
             st.subheader(f"{indice} – {anio}")
-
-            img   = obtener_indice(anio, indice)
+            img = obtener_indice(anio, indice)
             tiles = img.getMapId(VIS_PARAMS[indice])
 
-            mapa = folium.Map(location=[-16.435, -71.60], zoom_start=12, tiles="OpenStreetMap")
+            mapa = folium.Map(
+                location=[-16.435, -71.60],
+                zoom_start=12,
+                tiles="OpenStreetMap",
+            )
+
             folium.TileLayer(
                 tiles=tiles["tile_fetcher"].url_format,
                 attr="Google Earth Engine",
                 opacity=opacity,
             ).add_to(mapa)
 
-            st_folium(mapa, width=450, height=380, key=f"mapa_{indice}_{anio}")
-
+            st_folium(
+                mapa,
+                width=450,
+                height=380,
+                key=f"mapa_{indice}_{anio}_{i}",
+            )
             stats = estadisticas_indice(anio, indice)
+
             st.markdown(
                 f"**Promedio:** {stats['mean']:.3f}  \n"
                 f"**Mínimo:** {stats['min']:.3f}  \n"

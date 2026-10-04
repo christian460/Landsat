@@ -3,10 +3,10 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_folium import st_folium
 
-from Core.datos import estadisticas_indice, obtener_indice, serie_temporal
+from Core.datos import estadisticas_indice, obtener_indice, serie_temporal, serie_area_agua
 from Core.gee_init import asegurar_zona_estudio, asegurar_rio_chili
 from Core.indices import INDICES, VIS_PARAMS
-from Core.gee_init import inicializar_gee,asegurar_zona_estudio,asegurar_rio_chili
+from Core.prediccion import predecir_serie, calcular_anomalias_proyectadas
 
 # ── Contexto ─────────────────────────────────────────────────────────────────
 zona_estudio = asegurar_zona_estudio()
@@ -73,14 +73,14 @@ with tab_mapas:
         st.warning("No hay datos suficientes para el rango seleccionado.")
 
     MENSAJES_EVOLUCION = {
-        "NDVI": f"Según la tendencia del valor de este índice vemos que se ha incrementado relativamente con el correr "
+        "NDVI": "Según la tendencia del valor de este índice vemos que se ha incrementado relativamente con el correr "
                 "de los años, pero sin embargo es muy bajo estando en centésimos, que indica que hay perdida de cobertura vegetal, aun baja.",
         "SAVI": "Según la tendencia del valor de este índice vemos que se ha incrementado relativamente con el correr de los años, es relativamente "
                 "un poco mayor el NAVI pero sin embargo es muy bajo estando en rango de centésimos, lo cual sigue indicando que hay perdida de cobertura "
                 "vegetal, aunque relativamente baja.",
         "EVI": "Según la tendencia del valor de este índice, es más sensible para mostrar el área con alta vegetación y vemos que se ha mantenido idéntico"
-               "con el correr de los años, pero sin embargo es muy bajo estando en rango de décimos, lo cual sigue indicando que hay perdida de cobertura vegetal, "
-               "aunque relativamente baja en algunas zonas.",
+                "con el correr de los años, pero sin embargo es muy bajo estando en rango de décimos, lo cual sigue indicando que hay perdida de cobertura vegetal, "
+                "aunque relativamente baja en algunas zonas.",
         "GNDVI": "Según la tendencia del valor de este índice vemos que se ha incrementado relativamente con el correr de los años, pero sin embargo es muy bajo"
                  "estando en rango de centésimos, los valores bajos indican zonas relacionadas con bajo contenido de clorofila, indicador indirecto de fertilidad "
                  "y disponibilidad de nutrientes.",
@@ -98,13 +98,113 @@ with tab_mapas:
 
 # ── Tab 2 – Gráficos analíticos ───────────────────────────────────────────────
 with tab_graficos:
-    completos = [d for d in serie if d["Valor"] is not None]
-    anios     = [d["Año"]   for d in completos]
-    valores   = [d["Valor"] for d in completos]
+    # 1. Cálculo de predicción para el índice seleccionado
+    pred_res = predecir_serie(serie, campo_valor="Valor", campo_anio="Año", anios_futuros=(2026, 2027, 2028))
+    
+    completos = pred_res["historico"]
+    anios_hist = [d["Año"] for d in completos]
+    valores_hist = [d["Valor"] for d in completos]
+    preds = pred_res["predicciones"]
+    metricas = pred_res["metricas"]
 
-    # — Serie completa —
-    st.subheader(f"Evolución temporal del {indice}")
-    st.line_chart({str(a): v for a, v in zip(anios, valores)})
+    # — Serie completa y Proyección 2026-2028 —
+    st.subheader(f"Evolución temporal y proyección del {indice}")
+    
+    if completos:
+        fig_evo = go.Figure()
+        
+        # Serie histórica observada
+        fig_evo.add_trace(
+            go.Scatter(
+                x=anios_hist,
+                y=valores_hist,
+                mode="lines+markers",
+                name="Observado (2000–2025)",
+                line=dict(color="#1f77b4", width=2.5),
+                marker=dict(size=6),
+            )
+        )
+        
+        # Proyección futura con unión al último punto histórico
+        if pred_res["valido"] and preds:
+            anios_p = [anios_hist[-1]] + [p["Año"] for p in preds]
+            vals_p = [valores_hist[-1]] + [p["Valor"] for p in preds]
+            
+            # Banda de incertidumbre (95%)
+            anios_banda = [p["Año"] for p in preds]
+            max_banda = [p["Max"] for p in preds]
+            min_banda = [p["Min"] for p in preds]
+            
+            if all(m is not None for m in max_banda) and all(m is not None for m in min_banda):
+                fig_evo.add_trace(
+                    go.Scatter(
+                        x=anios_banda + anios_banda[::-1],
+                        y=max_banda + min_banda[::-1],
+                        fill="toself",
+                        fillcolor="rgba(255, 127, 14, 0.2)",
+                        line=dict(color="rgba(255,255,255,0)"),
+                        name="Intervalo de incertidumbre (95%)",
+                        showlegend=True,
+                    )
+                )
+            
+            fig_evo.add_trace(
+                go.Scatter(
+                    x=anios_p,
+                    y=vals_p,
+                    mode="lines+markers",
+                    name="Proyección (2026–2028)",
+                    line=dict(color="#ff7f0e", width=2.5, dash="dash"),
+                    marker=dict(size=7, symbol="diamond"),
+                )
+            )
+
+            # Línea divisoria entre histórico y predicción
+            fig_evo.add_vline(
+                x=anios_hist[-1] + 0.5,
+                line_width=2,
+                line_dash="dot",
+                line_color="#7f8c8d",
+                annotation_text="Límite Histórico / Futuro",
+                annotation_position="top left",
+            )
+
+            # Áreas sombreadas de fondo para diferenciar periodos
+            fig_evo.add_vrect(
+                x0=anios_hist[0] - 0.5,
+                x1=anios_hist[-1] + 0.5,
+                fillcolor="rgba(31, 119, 180, 0.04)",
+                layer="below",
+                line_width=0,
+            )
+            fig_evo.add_vrect(
+                x0=anios_hist[-1] + 0.5,
+                x1=preds[-1]["Año"] + 0.5,
+                fillcolor="rgba(255, 127, 14, 0.06)",
+                layer="below",
+                line_width=0,
+            )
+
+        fig_evo.update_layout(
+            xaxis=dict(title="Año", dtick=2),
+            yaxis=dict(title=f"Valor medio de {indice}"),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=30, b=20),
+        )
+        st.plotly_chart(fig_evo, use_container_width=True)
+        
+        if pred_res["valido"] and metricas.get("MAE") is not None:
+            st.info(
+                f"**Métricas del modelo ({metricas.get('Modelo')}):** "
+                f"MAE: `{metricas.get('MAE'):.4f}` | "
+                f"RMSE: `{metricas.get('RMSE'):.4f}` | "
+                f"R²: `{metricas.get('R2'):.4f}` | "
+                f"Tendencia anual: `{metricas.get('Pendiente_anual', 0):+.5f} / año`"
+            )
+    else:
+        st.warning("No hay datos históricos disponibles para generar la evolución temporal.")
+
     MENSAJES_SERIES = {
         "NDVI": f"Este gráfico representa la evolución temporal del índice espectral NDVI, donde observamos"
                 "tendencias de incremento o disminución asociadas a procesos de degradación o recuperación del suelo"
@@ -115,8 +215,8 @@ with tab_graficos:
                 "estudio, entre valores de 0.03 a 0.09, valores bajos, que de preferencia indicarían proceso de degradación "
                 "pérdida de cobertura vegetal.",
         "EVI": "Este gráfico representa la evolución temporal del índice espectral EVI, donde observamos tendencias de incremento "
-                "o disminución asociadas a procesos de degradación o recuperación del suelo en el área de estudio, entre valores de "
-                "-0.034 a 0.30, valores bajos, que de preferencia indicarían proceso de degradación y pérdida de cobertura vegetal.",
+               "o disminución asociadas a procesos de degradación o recuperación del suelo en el área de estudio, entre valores de "
+               "-0.034 a 0.30, valores bajos, que de preferencia indicarían proceso de degradación y pérdida de cobertura vegetal.",
         "GNDVI": "Este gráfico representa la evolución temporal del índice espectral GNDVI, donde observamos tendencias de incremento"
                  "o disminución asociadas a perdida de agua y procesos de degradación o recuperación del suelo en el área de estudio, "
                  "entre valores de 0.07 a 0.15, valores bajos, que de preferencia indicarían bajo contenido de clorofila, indicador indirecto "
@@ -128,75 +228,496 @@ with tab_graficos:
         "MNDWI": "Este gráfico representa la evolución temporal del índice espectral MNDWI, donde observamos tendencias de mínima disminución asociadas "
                  "a zonas con pérdida de agua, indicador de degradación, esta entre valores de -0.011 y -0.015.",
         "AWEI": "Este gráfico representa la evolución temporal del índice espectral AWEI, donde observamos tendencias de mínima disminución asociadas "
-                 "a zonas con pérdida de agua, indicador de degradación, esta entre valores de -0.011 y -0.015.",    
+                "a zonas con pérdida de agua, indicador de degradación, esta entre valores de -0.011 y -0.015.",    
     }
     st.caption(
-        "**Evolución temporal del índice espectral seleccionado. Permite identificar "
-        f"tendencias de cambio en la respuesta espectral del Río Chili.**\n\n{MENSAJES_SERIES[indice]}"
+        "**Evolución temporal y proyección del índice espectral seleccionado. Permite identificar "
+        f"tendencias históricas y proyecciones futuras en la respuesta espectral del Río Chili.**\n\n{MENSAJES_SERIES[indice]}"
     )
 
     st.divider()
 
-    # — Distribución por periodos —
-    st.subheader(f"Distribución del {indice} por periodos")
-    fig = go.Figure([
-        go.Box(y=[v for a, v in zip(anios, valores) if a <= 2006],        name="2000–2006", marker_color="red"),
-        go.Box(y=[v for a, v in zip(anios, valores) if 2007 <= a <= 2012], name="2007–2012", marker_color="orange"),
-        go.Box(y=[v for a, v in zip(anios, valores) if a >= 2013],         name="2013–2025", marker_color="green"),
-    ])
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption(
-        "**Variabilidad del índice espectral en distintos intervalos temporales. "
-        "Facilita la comparación de dispersión y estabilidad de los datos.**"
-    )
+    # — Distribución por periodos con posición de predicciones —
+    st.subheader(f"Distribución del {indice} por periodos y contraste proyectado")
+    if completos:
+        fig_dist = go.Figure([
+            go.Box(y=[v for a, v in zip(anios_hist, valores_hist) if a <= 2006], name="2000–2006", marker_color="#e74c3c"),
+            go.Box(y=[v for a, v in zip(anios_hist, valores_hist) if 2007 <= a <= 2012], name="2007–2012", marker_color="#f39c12"),
+            go.Box(y=[v for a, v in zip(anios_hist, valores_hist) if a >= 2013], name="2013–2025", marker_color="#2ecc71"),
+        ])
+        
+        # Superponer puntos proyectados para comparar con las distribuciones históricas
+        if pred_res["valido"] and preds:
+            fig_dist.add_trace(
+                go.Scatter(
+                    x=["2013–2025"] * len(preds),
+                    y=[p["Valor"] for p in preds],
+                    mode="markers+text",
+                    text=[f"{p['Año']}: {p['Valor']:.3f}" for p in preds],
+                    textposition="top right",
+                    marker=dict(color="#8e44ad", size=10, symbol="diamond-dot"),
+                    name="Proyección (2026–2028)",
+                )
+            )
+            
+        fig_dist.update_layout(
+            yaxis_title=f"Valor de {indice}",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=30, b=20),
+        )
+        st.plotly_chart(fig_dist, use_container_width=True)
+        st.caption(
+            "**Variabilidad del índice espectral en distintos intervalos temporales y ubicación relativa "
+            "de los valores proyectados 2026–2028 frente a las cajas de dispersión histórica.**"
+        )
 
     st.divider()
 
-    # — Anomalías —
-    st.subheader(f"Análisis de anomalías del {indice}")
+    # — Anomalías Observadas y Proyectadas —
+    st.subheader(f"Análisis de anomalías del {indice} (Históricas y Proyectadas)")
+    if completos:
+        anom_data = calcular_anomalias_proyectadas(completos, preds)
+        media = anom_data["media"]
+        std = anom_data["std"]
+        
+        def _color(a):
+            if abs(a) >= std:       return "#1b5e20" if a > 0 else "#b71c1c"
+            if abs(a) >= 0.5 * std: return "#4caf50" if a > 0 else "#f44336"
+            return                         "#a5d6a7" if a > 0 else "#ef9a9a"
 
-    media = sum(valores) / len(valores)
-    std   = (sum((v - media) ** 2 for v in valores) / len(valores)) ** 0.5
-    anom  = [v - media for v in valores]
+        # Barras históricas observadas
+        hist_anom = anom_data["historico"]
+        fig_anom = go.Figure()
+        
+        fig_anom.add_trace(
+            go.Bar(
+                x=[d["Año"] for d in hist_anom],
+                y=[d["Anomalia"] for d in hist_anom],
+                marker_color=[_color(d["Anomalia"]) for d in hist_anom],
+                name="Anomalía observada",
+            )
+        )
+        
+        # Barras proyectadas 2026-2028 con patrón rayado
+        if pred_res["valido"] and anom_data["proyectado"]:
+            proj_anom = anom_data["proyectado"]
+            fig_anom.add_trace(
+                go.Bar(
+                    x=[d["Año"] for d in proj_anom],
+                    y=[d["Anomalia"] for d in proj_anom],
+                    marker=dict(
+                        color=[_color(d["Anomalia"]) for d in proj_anom],
+                        pattern_shape="/",
+                        line=dict(color="#333333", width=1.5),
+                    ),
+                    name="Anomalía proyectada (2026–2028)",
+                )
+            )
 
-    def _color(a):
-        if abs(a) >= std:       return "darkgreen"  if a > 0 else "darkred"
-        if abs(a) >= 0.5 * std: return "green"      if a > 0 else "red"
-        return                         "lightgreen" if a > 0 else "lightcoral"
+            # Línea divisoria entre histórico y predicción
+            fig_anom.add_vline(
+                x=hist_anom[-1]["Año"] + 0.5,
+                line_width=2,
+                line_dash="dot",
+                line_color="#7f8c8d",
+                annotation_text="Límite Histórico / Futuro",
+                annotation_position="top left",
+            )
 
-    fig2 = go.Figure([
-        go.Bar(x=anios, y=anom, marker_color=[_color(a) for a in anom], name="Anomalía")
-    ])
-    fig2.add_hline(y=0, line_width=2, line_color="black")
-    fig2.update_layout(
-        title=f"Anomalías del {indice} respecto al promedio histórico",
-        xaxis_title="Año",
-        yaxis_title="Anomalía",
-        showlegend=False,
-    )
-    MENSAJES_ANOMALIAS = {
-        "NDVI": f"Este gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro)"
-                ", los cuales pueden estar asociados a eventos ambientales extremos o cambios abruptos en las condiciones del suelo. Y que claramente muestran valore que oscilan"
-                "entre -0.015 y 0.025 valores que indican que existe procesos de degradación del suelo.",
-        "SAVI": "Este gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro), los "
-                "cuales pueden estar asociados a eventos ambientales extremos o cambios abruptos en las condiciones del suelo. Y que claramente muestran valore que oscilan entre -0.025 "
-                "y 0.038 valores que indican que existe procesos de degradación del suelo.",
-        "EVI": "",
-        "GNDVI": "Este gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro son los que "
-                 "sobrepasan la desviación estándar), los cuales pueden estar asociados a eventos ambientales extremos o cambios abruptos en las condiciones del suelo. Y que claramente "
-                 "muestran valore que oscilan entre -0.015 y 0.030 valores que indican que existe bajo contenido de clorofila, por lo tanto, baja fertilidad y disponibilidad de nutrientes.",
-        "LSWI": "Este gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro son los que sobrepasan "
-                "la desviación estándar), los cuales pueden estar asociados a eventos de riesgo de compactación y pérdida de estructura. Y que claramente muestran valore que oscilan entre -0.005 y 0.020.",
-        "NDWI": "El siguiente gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro son los que sobrepasan "
-                "la desviación estándar), los cuales pueden estar asociados a eventos de riesgo de sequía agrícola y degradación por falta de agua. Y que claramente muestran valore que oscilan entre 0.015 y -0.025",
-        "MNDWI": "El gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro son los que sobrepasan la desviación estándar), "
-                 "los cuales pueden estar asociados a zonas con pérdida de agua, indicador de degradación. Y que claramente muestran valore que oscilan entre 0.015 y -0.020.",
-        "AWEI": "Este gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral (los que están en color rojo oscuro y verde oscuro son los que sobrepasan la desviación estándar), "
-                "los cuales pueden estar asociados a zonas con pérdida de agua, indicador de degradación. Y que claramente muestran valore que oscilan entre 0.015 y -0.020."
-    }
-    st.plotly_chart(fig2, use_container_width=True)
-    st.caption(f"**Valores atípicos que se desvían del comportamiento promedio histórico.**\n\n {MENSAJES_ANOMALIAS[indice]}")
-    st.markdown(
-        f"**Promedio histórico:** {media:.4f}  \n"
-        f"**Desviación estándar:** {std:.4f}"
-    )
+            # Áreas sombreadas de fondo para diferenciar periodos
+            fig_anom.add_vrect(
+                x0=hist_anom[0]["Año"] - 0.5,
+                x1=hist_anom[-1]["Año"] + 0.5,
+                fillcolor="rgba(31, 119, 180, 0.04)",
+                layer="below",
+                line_width=0,
+            )
+            fig_anom.add_vrect(
+                x0=hist_anom[-1]["Año"] + 0.5,
+                x1=proj_anom[-1]["Año"] + 0.5,
+                fillcolor="rgba(44, 160, 44, 0.06)",
+                layer="below",
+                line_width=0,
+            )
+
+        fig_anom.add_hline(y=0, line_width=1.5, line_color="black")
+        fig_anom.add_hline(y=std, line_dash="dot", line_color="gray", annotation_text="+1σ", annotation_position="top right")
+        fig_anom.add_hline(y=-std, line_dash="dot", line_color="gray", annotation_text="-1σ", annotation_position="bottom right")
+
+        fig_anom.update_layout(
+            xaxis=dict(title="Año", dtick=2),
+            yaxis_title="Anomalía",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=40, b=20),
+        )
+        
+        MENSAJES_ANOMALIAS = {
+            "NDVI": "Este gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral, "
+                    "los cuales pueden estar asociados a eventos ambientales extremos o cambios abruptos en las condiciones del suelo.",
+            "SAVI": "Este gráfico identifica valores atípicos que se desvían del comportamiento promedio del índice espectral, "
+                    "los cuales pueden estar asociados a eventos ambientales extremos o cambios en la cobertura vegetal.",
+            "EVI": "Este gráfico identifica valores atípicos de vigor vegetal respecto a la media histórica observada.",
+            "GNDVI": "Este gráfico identifica valores atípicos asociados a variaciones en contenido de clorofila y disponibilidad de nutrientes.",
+            "LSWI": "Este gráfico identifica anomalías de humedad y riesgo de sequía/compactación de ribera.",
+            "NDWI": "Este gráfico identifica anomalías en la presencia de agua superficial y humedad de suelo.",
+            "MNDWI": "Este gráfico identifica desviaciones en la lámina de agua identificada en el cauce.",
+            "AWEI": "Este gráfico identifica desviaciones en la extracción automatizada del espejo de agua.",
+        }
+        st.plotly_chart(fig_anom, use_container_width=True)
+        st.caption(f"**Valores atípicos que se desvían del comportamiento promedio histórico.**\n\n{MENSAJES_ANOMALIAS.get(indice, '')}")
+        st.markdown(
+            f"**Promedio histórico:** `{media:.4f}`  \n"
+            f"**Desviación estándar (1σ):** `{std:.4f}`"
+        )
+        st.info(
+            "ℹ️ **Nota metodológica:** Las anomalías proyectadas representan posibles desviaciones respecto "
+            "al comportamiento histórico esperado del índice y no constituyen una medición directa de contaminación "
+            "química o microbiológica."
+        )
+
+    st.divider()
+
+    # — 4. Predicción de Superficie de Agua 2026-2028 —
+    st.subheader("Evolución y predicción de la superficie de agua (km²)")
+    
+    try:
+        serie_agua = serie_area_agua()
+        pred_agua = predecir_serie(
+            serie_agua,
+            campo_valor="Área_km2",
+            campo_anio="Año",
+            anios_futuros=(2026, 2027, 2028),
+        )
+        
+        if pred_agua["historico"]:
+            anios_a_hist = [d["Año"] for d in pred_agua["historico"]]
+            vals_a_hist = [d["Valor"] for d in pred_agua["historico"]]
+            preds_a = pred_agua["predicciones"]
+            metricas_a = pred_agua["metricas"]
+            
+            fig_agua = go.Figure()
+            
+            # Histórico
+            fig_agua.add_trace(
+                go.Scatter(
+                    x=anios_a_hist,
+                    y=vals_a_hist,
+                    mode="lines+markers",
+                    name="Área observada (2000–2025)",
+                    line=dict(color="#0288d1", width=2.5),
+                    marker=dict(size=6),
+                )
+            )
+            
+            # Proyección
+            if pred_agua["valido"] and preds_a:
+                anios_ap = [anios_a_hist[-1]] + [p["Año"] for p in preds_a]
+                vals_ap = [vals_a_hist[-1]] + [p["Valor"] for p in preds_a]
+                
+                anios_a_banda = [p["Año"] for p in preds_a]
+                max_a_banda = [p["Max"] for p in preds_a]
+                min_a_banda = [max(0.0, p["Min"]) if p.get("Min") is not None else None for p in preds_a]
+                
+                if all(m is not None for m in max_a_banda) and all(m is not None for m in min_a_banda):
+                    fig_agua.add_trace(
+                        go.Scatter(
+                            x=anios_a_banda + anios_a_banda[::-1],
+                            y=max_a_banda + min_a_banda[::-1],
+                            fill="toself",
+                            fillcolor="rgba(2, 136, 209, 0.2)",
+                            line=dict(color="rgba(255,255,255,0)"),
+                            name="Intervalo incertidumbre (95%)",
+                        )
+                    )
+                
+                fig_agua.add_trace(
+                    go.Scatter(
+                        x=anios_ap,
+                        y=vals_ap,
+                        mode="lines+markers",
+                        name="Área proyectada (2026–2028)",
+                        line=dict(color="#e65100", width=2.5, dash="dash"),
+                        marker=dict(size=7, symbol="diamond"),
+                    )
+                )
+
+                # Línea divisoria entre histórico y predicción
+                fig_agua.add_vline(
+                    x=anios_a_hist[-1] + 0.5,
+                    line_width=2,
+                    line_dash="dot",
+                    line_color="#7f8c8d",
+                    annotation_text="Límite Histórico / Futuro",
+                    annotation_position="top left",
+                )
+
+                # Áreas sombreadas de fondo para diferenciar periodos
+                fig_agua.add_vrect(
+                    x0=anios_a_hist[0] - 0.5,
+                    x1=anios_a_hist[-1] + 0.5,
+                    fillcolor="rgba(31, 119, 180, 0.04)",
+                    layer="below",
+                    line_width=0,
+                )
+
+            fig_agua.update_layout(
+                xaxis=dict(title="Año", dtick=2),
+                yaxis=dict(title="Superficie de agua (km²)"),
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=20, r=20, t=30, b=20),
+            )
+            st.plotly_chart(fig_agua, use_container_width=True)
+            
+            if pred_agua["valido"] and metricas_a.get("MAE") is not None:
+                st.caption(
+                    f"**Validación modelo de superficie:** MAE = `{metricas_a.get('MAE'):.4f} km²` | "
+                    f"RMSE = `{metricas_a.get('RMSE'):.4f} km²` | "
+                    f"R² = `{metricas_a.get('R2'):.4f}`. "
+                    "Estimación calculada a partir de la máscara de agua MNDWI (umbral 0.0) en el buffer del Río Chili."
+                )
+                st.caption(
+                    f"Este gráfico muestra la evolución de la superficie de agua del Río Chili y estima su comportamiento "
+                    f"para los próximos años a partir de los cambios detectados mediante el índice MNDWI. Permite identificar "
+                    f"aumentos o disminuciones en la extensión de la superficie de agua, así como posibles cambios respecto al "
+                    f"comportamiento histórico observado."
+                )
+        else:
+            st.warning("No se pudieron cargar los datos históricos de superficie de agua.")
+    except Exception as e:
+        st.warning(f"No fue posible generar la proyección de superficie de agua: {e}")
+
+    st.divider()
+
+    # — 5. Comparación histórica vs. predicha —
+    st.subheader(f"Comparación histórica vs. predicha – {indice}")
+
+    if completos and pred_res["valido"] and preds:
+        ultimo_hist = completos[-1]
+        val_ref = ultimo_hist["Valor"]
+        anio_ref = ultimo_hist["Año"]
+        m_anual = metricas.get("Pendiente_anual", 0.0)
+
+        # 1. Gráfico comparativo con separación visual explícita
+        fig_comp = go.Figure()
+
+        # Zona histórica
+        fig_comp.add_trace(
+            go.Scatter(
+                x=anios_hist,
+                y=valores_hist,
+                mode="lines+markers",
+                name=f"Histórico ({anios_hist[0]}–{anio_ref})",
+                line=dict(color="#1f77b4", width=2.5),
+                marker=dict(size=6, symbol="circle"),
+            )
+        )
+
+        # Banda de incertidumbre (únicamente si el modelo seleccionado provee intervalos analíticos)
+        anios_banda = [p["Año"] for p in preds]
+        max_banda = [p["Max"] for p in preds]
+        min_banda = [p["Min"] for p in preds]
+
+        if all(m is not None for m in max_banda) and all(m is not None for m in min_banda):
+            fig_comp.add_trace(
+                go.Scatter(
+                    x=anios_banda + anios_banda[::-1],
+                    y=max_banda + min_banda[::-1],
+                    fill="toself",
+                    fillcolor="rgba(255, 127, 14, 0.2)",
+                    line=dict(color="rgba(255,255,255,0)"),
+                    name="Incertidumbre proyectada (95%)",
+                )
+            )
+
+        # Zona proyectada unida a la última observación
+        fig_comp.add_trace(
+            go.Scatter(
+                x=[anio_ref] + [p["Año"] for p in preds],
+                y=[val_ref] + [p["Valor"] for p in preds],
+                mode="lines+markers",
+                name="Predicción (2026–2028)",
+                line=dict(color="#ff7f0e", width=2.5, dash="dash"),
+                marker=dict(size=8, symbol="diamond"),
+            )
+        )
+
+        # Línea divisoria entre histórico y predicción
+        fig_comp.add_vline(
+            x=anio_ref + 0.5,
+            line_width=2,
+            line_dash="dot",
+            line_color="#7f8c8d",
+            annotation_text="Límite Histórico / Futuro",
+            annotation_position="top left",
+        )
+
+        # Áreas sombreadas de fondo para diferenciar periodos
+        fig_comp.add_vrect(
+            x0=anios_hist[0] - 0.5,
+            x1=anio_ref + 0.5,
+            fillcolor="rgba(31, 119, 180, 0.04)",
+            layer="below",
+            line_width=0,
+        )
+        fig_comp.add_vrect(
+            x0=anio_ref + 0.5,
+            x1=preds[-1]["Año"] + 0.5,
+            fillcolor="rgba(255, 127, 14, 0.06)",
+            layer="below",
+            line_width=0,
+        )
+
+        fig_comp.update_layout(
+            xaxis=dict(title="Año", dtick=2),
+            yaxis=dict(title=f"Valor de {indice}"),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=30, b=20),
+        )
+        st.plotly_chart(fig_comp, use_container_width=True)
+
+        # 2. Comparación numérica (Tabla y Tarjetas)
+        st.markdown(f"#### Tabla de variación proyectada respecto a {anio_ref} (Valor base: `{val_ref:.4f}`)")
+        
+        filas_comparacion = []
+        for p in preds:
+            dif_abs = p["Valor"] - val_ref
+            if abs(val_ref) > 1e-4:
+                var_pct = (dif_abs / abs(val_ref)) * 100.0
+                var_pct_str = f"{var_pct:+.2f}%"
+            else:
+                var_pct_str = "N/D (base ~0)"
+
+            if p.get("Min") is not None and p.get("Max") is not None:
+                rango_str = f"[{p['Min']:.4f} a {p['Max']:.4f}]"
+            else:
+                rango_str = "No disponible"
+
+            filas_comparacion.append({
+                "Año": p["Año"],
+                "Tipo": "Predicción",
+                "Valor Proyectado": f"{p['Valor']:.4f}",
+                "Rango 95%": rango_str,
+                "Diferencia Absoluta": f"{dif_abs:+.4f}",
+                "Variación (%)": var_pct_str,
+            })
+
+        st.dataframe(filas_comparacion, use_container_width=True, hide_index=True)
+
+        # 3. Tendencia e Interpretación automática
+        if m_anual > 0.0005:
+            tendencia_txt = "tendencia creciente sostenida"
+            dinamica_txt = "un incremento gradual en los valores esperados"
+        elif m_anual < -0.0005:
+            tendencia_txt = "tendencia decreciente sostenida"
+            dinamica_txt = "una disminución progresiva en los valores esperados"
+        else:
+            tendencia_txt = "comportamiento aproximadamente estable"
+            dinamica_txt = "variaciones mínimas cercanas al promedio histórico"
+
+        val_2028 = preds[-1]["Valor"]
+        min_2028 = preds[-1]["Min"]
+        max_2028 = preds[-1]["Max"]
+
+        col_met1, col_met2, col_met3 = st.columns(3)
+        with col_met1:
+            st.metric(
+                label=f"Último observado ({anio_ref})",
+                value=f"{val_ref:.4f}",
+            )
+        with col_met2:
+            dif_2028 = val_2028 - val_ref
+            pct_2028 = (dif_2028 / abs(val_ref) * 100) if abs(val_ref) > 1e-4 else 0.0
+            st.metric(
+                label="Proyección final (2028)",
+                value=f"{val_2028:.4f}",
+                delta=f"{dif_2028:+.4f} ({pct_2028:+.1f}%)" if abs(val_ref) > 1e-4 else f"{dif_2028:+.4f}",
+            )
+        with col_met3:
+            st.metric(
+                label="Tasa de tendencia anual",
+                value=f"{m_anual:+.5f} / año",
+                help="Pendiente anual estimada por el modelo de mínimos cuadrados.",
+            )
+
+        r2_str = f"{metricas.get('R2'):.4f}" if metricas.get('R2') is not None else "N/D"
+        mae_str = f"{metricas.get('MAE'):.5f}" if metricas.get('MAE') is not None else "N/D"
+        rmse_str = f"{metricas.get('RMSE'):.5f}" if metricas.get('RMSE') is not None else "N/D"
+        modelo_sel = metricas.get('Modelo', 'N/D')
+
+        if min_2028 is not None and max_2028 is not None:
+            incertidumbre_txt = f"El intervalo al 95% para 2028 se sitúa entre `{min_2028:.4f}` y `{max_2028:.4f}`."
+        else:
+            incertidumbre_txt = "Intervalo analítico no aplicable para el modelo seleccionado."
+
+        st.markdown(
+            f"""
+            **Interpretación de la proyección:**
+            - **Comportamiento histórico:** La serie observada (2000–{anio_ref}) presenta una {tendencia_txt}, con una tasa media de `{m_anual:+.5f}` por año.
+            - **Comportamiento proyectado:** Para el periodo 2026–2028, el modelo **{modelo_sel}** proyecta la continuidad de este comportamiento, estimando {dinamica_txt} hasta alcanzar `{val_2028:.4f}` en 2028.
+            - **Nivel de incertidumbre:** {incertidumbre_txt}
+            - **Evaluación del ajuste:** MAE = `{mae_str}`, RMSE = `{rmse_str}`, R² = `{r2_str}`.
+
+            > *Nota:* Estas proyecciones representan una extrapolación estadística del comportamiento histórico del índice espectral en el cauce y su entorno ripario. No constituyen una inferencia directa de calidad química o bacteriológica del agua.
+            """
+        )
+
+        # Tabla de evaluación de modelos
+        modelos_ev = pred_res.get("modelos_evaluados", [])
+        if modelos_ev:
+            with st.expander("Comparación de modelos evaluados", expanded=False):
+                st.caption(
+                    pred_res.get(
+                        "mensaje_seleccion",
+                        f"Modelo seleccionado: **{modelo_sel}** (menor MAE en validación rolling-origin)."
+                    )
+                )
+                filas_mod = []
+                for m in modelos_ev:
+                    r2_m = f"{m['R2']:.4f}" if m.get('R2') is not None else "N/D"
+                    mae_m = f"{m['MAE']:.5f}" if m.get('MAE') is not None else "N/D"
+                    rmse_m = f"{m['RMSE']:.5f}" if m.get('RMSE') is not None else "N/D"
+                    splits_m = str(m.get('Splits', '-'))
+                    filas_mod.append({
+                        "Modelo": m["Modelo"],
+                        "MAE": mae_m,
+                        "RMSE": rmse_m,
+                        "R²": r2_m,
+                        "Splits": splits_m,
+                        "Seleccionado": "✅" if m["Modelo"] == modelo_sel else "",
+                    })
+                st.dataframe(filas_mod, use_container_width=True, hide_index=True)
+
+        # 4. Comparación de Superficie de Agua
+        try:
+            if "pred_agua" in locals() and pred_agua.get("valido") and pred_agua.get("predicciones"):
+                st.markdown("---")
+                st.markdown("#### Comparación de superficie de agua: Histórica vs. Proyectada")
+                
+                ultimo_a_hist = pred_agua["historico"][-1]
+                area_ref = ultimo_a_hist["Valor"]
+                anio_a_ref = ultimo_a_hist["Año"]
+                preds_a_list = pred_agua["predicciones"]
+                
+                cols_a = st.columns(len(preds_a_list) + 1)
+                with cols_a[0]:
+                    st.metric(
+                        label=f"Área observada ({anio_a_ref})",
+                        value=f"{area_ref:.3f} km²",
+                    )
+                for idx, pa in enumerate(preds_a_list):
+                    with cols_a[idx + 1]:
+                        dif_a = pa["Valor"] - area_ref
+                        pct_a = (dif_a / area_ref * 100.0) if area_ref > 0 else 0.0
+                        st.metric(
+                            label=f"Área predicha ({pa['Año']})",
+                            value=f"{pa['Valor']:.3f} km²",
+                            delta=f"{dif_a:+.3f} km² ({pct_a:+.1f}%)" if area_ref > 0 else f"{dif_a:+.3f} km²",
+                        )
+        except Exception:
+            pass
+    else:
+        st.info("No hay información suficiente para generar la comparación histórica vs. predicha.")
+
+

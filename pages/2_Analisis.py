@@ -1,6 +1,7 @@
 import folium
 import plotly.graph_objects as go
 import streamlit as st
+import pandas as pd
 from streamlit_folium import st_folium
 
 from Core.datos import estadisticas_indice, obtener_indice, serie_temporal
@@ -193,6 +194,42 @@ with tab_graficos:
             margin=dict(l=20, r=20, t=30, b=20),
         )
         st.plotly_chart(fig_evo, use_container_width=True)
+
+        with st.expander("📊 Ver datos de evolución y proyección"):
+            datos_grafico = [
+                {
+                    "Año": d["Año"],
+                    "Tipo": "Observado",
+                    "Valor": d["Valor"],
+                    "Mínimo (95%)": None,
+                    "Máximo (95%)": None,
+                }
+                for d in completos
+            ]
+
+            if pred_res["valido"] and preds:
+                datos_grafico.extend([
+                    {
+                        "Año": p["Año"],
+                        "Tipo": "Predicción",
+                        "Valor": p["Valor"],
+                        "Mínimo (95%)": p.get("Min"),
+                        "Máximo (95%)": p.get("Max"),
+                    }
+                    for p in preds
+                ])
+
+            df_grafico = pd.DataFrame(datos_grafico)
+            st.dataframe(
+                df_grafico.round(4),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.caption(
+                "Los límites del 95 % se muestran cuando el modelo "
+                "puede calcularlos válidamente."
+            )
         
         if pred_res["valido"] and metricas.get("MAE") is not None:
             st.info(
@@ -232,7 +269,7 @@ with tab_graficos:
     }
     st.caption(
         "**Evolución temporal y proyección del índice espectral seleccionado. Permite identificar "
-        f"tendencias históricas y proyecciones futuras en la respuesta espectral del Río Chili.**\n\n{MENSAJES_SERIES[indice]}"
+        f"tendenci  as históricas y proyecciones futuras en la respuesta espectral del Río Chili.**\n\n{MENSAJES_SERIES[indice]}"
     )
 
     st.divider()
@@ -266,6 +303,42 @@ with tab_graficos:
             margin=dict(l=20, r=20, t=30, b=20),
         )
         st.plotly_chart(fig_dist, use_container_width=True)
+
+        with st.expander("📊 Ver datos de distribución por periodos"):
+            datos_dist = []
+
+            for anio, valor in zip(anios_hist, valores_hist):
+                if anio <= 2006:
+                    periodo = "2000–2006"
+                elif anio <= 2012:
+                    periodo = "2007–2012"
+                else:
+                    periodo = "2013–2025"
+
+                datos_dist.append({
+                    "Año": anio,
+                    "Periodo": periodo,
+                    "Tipo": "Observado",
+                    "Valor": valor,
+                })
+
+            if pred_res["valido"] and preds:
+                datos_dist.extend([
+                    {
+                        "Año": p["Año"],
+                        "Periodo": "2026–2030",
+                        "Tipo": "Predicción",
+                        "Valor": p["Valor"],
+                    }
+                    for p in preds
+                ])
+
+            st.dataframe(
+                pd.DataFrame(datos_dist).round(4),
+                use_container_width=True,
+                hide_index=True,
+            )
+
         st.caption(
             "**Variabilidad del índice espectral en distintos intervalos temporales y ubicación relativa "
             "de los valores proyectados 2026–2028 frente a las cajas de dispersión histórica.**"
@@ -364,6 +437,32 @@ with tab_graficos:
             "AWEI": "Este gráfico identifica desviaciones en la extracción automatizada del espejo de agua.",
         }
         st.plotly_chart(fig_anom, use_container_width=True)
+
+        with st.expander("📊 Ver datos de anomalías"):
+            datos_anomalias = [
+                {
+                    "Año": d["Año"],
+                    "Tipo": "Observada",
+                    "Anomalía": d["Anomalia"],
+                }
+                for d in anom_data["historico"]
+            ]
+
+            datos_anomalias.extend([
+                {
+                    "Año": d["Año"],
+                    "Tipo": "Proyectada",
+                    "Anomalía": d["Anomalia"],
+                }
+                for d in anom_data["proyectado"]
+            ])
+
+            st.dataframe(
+                pd.DataFrame(datos_anomalias).round(4),
+                use_container_width=True,
+                hide_index=True,
+            )
+            
         st.caption(f"**Valores atípicos que se desvían del comportamiento promedio histórico.**\n\n{MENSAJES_ANOMALIAS.get(indice, '')}")
         st.markdown(
             f"**Promedio histórico:** `{media:.4f}`  \n"

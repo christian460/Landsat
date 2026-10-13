@@ -1,26 +1,8 @@
-"""
-Core/prediccion.py
-------------------
-Motor de predicción para series temporales anuales de índices espectrales Landsat (2000–2025, N ≈ 26).
-Compara 8 modelos mediante validación temporal rolling-origin (expanding window),
-selecciona el mejor según menor MAE (RMSE como desempate) y genera predicciones
-recursivas para 2026–2028.
-
-Modelos evaluados:
-  1. Naive (último valor observado)
-  2. Regresión Lineal (OLS baseline)
-  3. Regresión Polinómica grado 2
-  4. Holt (Suavizado Exponencial con Tendencia)
-  5. ARIMA(1,1,0) (Diferenciación + AR(1))
-  6. SVR con kernel RBF (con StandardScaler dentro de cada split)
-  7. Random Forest Regressor (features: Año, lag_1, lag_2, rolling_mean_3)
-  8. XGBoost Regressor (features: Año, lag_1, lag_2, rolling_mean_3)
-"""
-
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import streamlit as st
 
 # Intentar importar librerías ML opcionales de forma segura
 try:
@@ -52,6 +34,7 @@ ANIOS_TEST_DEFAULT = 5  # Ventanas de validación temporal (2021..2025)
 # API PÚBLICA
 # ─────────────────────────────────────────────────────────────────────────────
 
+@st.cache_data(show_spinner=False)
 def predecir_serie(
     serie: List[Dict[str, Any]],
     campo_valor: str = "Valor",
@@ -59,12 +42,7 @@ def predecir_serie(
     anios_futuros: Tuple[int, ...] = ANIOS_FUTUROS_DEFAULT,
     anios_test: int = ANIOS_TEST_DEFAULT,
 ) -> Dict[str, Any]:
-    """
-    Evalúa y compara 8 modelos de series temporales y Machine Learning
-    sobre la serie histórica mediante validación rolling-origin.
-    Selecciona automáticamente el modelo con menor MAE y genera proyecciones
-    recursivas para los años futuros especificados.
-    """
+
     # 1. Limpieza y ordenamiento
     datos = _limpiar(serie, campo_valor, campo_anio)
     n = len(datos)
@@ -178,7 +156,7 @@ def predecir_serie(
         "mensaje_seleccion": (
             f"Se evaluaron {len(evaluaciones)} modelos mediante validación rolling-origin ({k} splits temporales). "
             f"El modelo **{mejor_nombre}** obtuvo el menor MAE ({mae_sel:.5f}, RMSE = {rmse_sel:.5f}) "
-            "y fue seleccionado automáticamente para proyectar el periodo 2026–2028."
+            f"y fue seleccionado automáticamente para proyectar el periodo {anios_futuros[0]}–{anios_futuros[-1]}."
         ),
     }
 
@@ -187,10 +165,7 @@ def calcular_anomalias_proyectadas(
     historico: List[Dict[str, Any]],
     predicciones: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """
-    Calcula anomalías para la serie histórica (Tipo='Observada') y las
-    proyecciones (Tipo='Proyectada') respecto a la media y desviación estándar histórica.
-    """
+
     valores_hist = [d["Valor"] for d in historico if d.get("Valor") is not None]
     if not valores_hist:
         return {"historico": [], "proyectado": [], "media": 0.0, "std": 0.0}
@@ -230,14 +205,7 @@ def calcular_anomalias_proyectadas(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _crear_dataset_lags(anios: np.ndarray, vals: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Construye las 4 features temporales respetando estrictamente el orden temporal:
-      - Año
-      - lag_1 (y_{t-1})
-      - lag_2 (y_{t-2})
-      - rolling_mean_3 ((y_{t-1} + y_{t-2} + y_{t-3}) / 3)
-    Elimina únicamente las 3 primeras observaciones que no disponen de los lags requeridos.
-    """
+
     n = len(vals)
     if n < 4:
         raise ValueError("Se requieren al menos 4 observaciones para construir lags.")
@@ -256,11 +224,7 @@ def _crear_dataset_lags(anios: np.ndarray, vals: np.ndarray) -> Tuple[np.ndarray
 
 
 def _crear_vector_features_paso(anios_hist: List[float], vals_hist: List[float], anio_target: float) -> np.ndarray:
-    """
-    Construye el vector de características para predecir un paso futuro:
-    [anio_target, lag_1, lag_2, rolling_mean_3]
-    utilizando los últimos valores conocidos (observados o predichos recursivamente).
-    """
+
     lag1 = vals_hist[-1]
     lag2 = vals_hist[-2]
     roll3 = (vals_hist[-1] + vals_hist[-2] + vals_hist[-3]) / 3.0
@@ -508,7 +472,12 @@ def _rf_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
         )
 
     modelo.fit(X, y)
-    return {"modelo": modelo}
+    # Compute residual standard deviation and sample size for confidence intervals
+    preds = modelo.predict(X) if not HAS_SKLEARN else modelo.predict(X)
+    residuals = y - preds
+    s = float(np.std(residuals)) if residuals.size > 0 else 0.0
+    n = len(y)
+    return {"modelo": modelo, "s": s, "n": n}
 
 def _rf_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: List[float], anio_target: float) -> float:
     x_feat = _crear_vector_features_paso(anios_hist, vals_hist, anio_target)
@@ -635,7 +604,7 @@ def _xgboost_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
     if len(y) < 5:
         raise ValueError("Observaciones insuficientes para XGBoost con lags.")
 
-    if HAS_XGBOOST:
+    if HAS_XGBOOST and HAS_SKLEARN:
         modelo = XGBRegressor(
             n_estimators=30,
             max_depth=2,
@@ -662,7 +631,12 @@ def _xgboost_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
         )
 
     modelo.fit(X, y)
-    return {"modelo": modelo}
+    # Compute residual standard deviation and sample size for confidence intervals
+    preds = modelo.predict(X)
+    residuals = y - preds
+    s = float(np.std(residuals)) if residuals.size > 0 else 0.0
+    n = len(y)
+    return {"modelo": modelo, "s": s, "n": n}
 
 def _xgboost_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: List[float], anio_target: float) -> float:
     x_feat = _crear_vector_features_paso(anios_hist, vals_hist, anio_target)
@@ -675,10 +649,7 @@ def _xgboost_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _obtener_definiciones_modelos():
-    """
-    Retorna lista de tuplas:
-      (nombre_modelo, es_ml_con_lags, fn_entrenar, fn_predecir_step)
-    """
+
     return [
         ("Naive", False, _naive_train, _naive_predict),
         ("Regresión Lineal", False, _lineal_train, _lineal_predict),
@@ -703,15 +674,7 @@ def _validar_rolling(
     fn_entrenar: Any,
     fn_predecir_step: Any,
 ) -> Dict[str, Any]:
-    """
-    Ejecuta validación temporal expanding window:
-      2000..2020 -> 2021
-      2000..2021 -> 2022
-      2000..2022 -> 2023
-      2000..2023 -> 2024
-      2000..2024 -> 2025
-    Calcula MAE promedio, RMSE promedio y número de splits válidos.
-    """
+
     n = len(anios)
     errores = []
     reales = []
@@ -769,12 +732,12 @@ def _calcular_intervalos(
     anio_target: float,
     y_hat: float
 ) -> Tuple[Optional[float], Optional[float]]:
-    """
-    Calcula intervalos analíticos al 95% para modelos estadísticos soportados.
-    Para modelos de ML (RF, XGBoost, SVR), retorna (None, None) según directrices.
-    """
+
     if nombre_modelo in ("Random Forest Regressor", "XGBoost Regressor", "SVR con kernel RBF"):
-        return None, None
+        s = modelo.get("s", 0.0)
+        n = modelo.get("n", len(vals_hist))
+        se = s * math.sqrt(1.0 + 1.0 / n)
+        return y_hat - 1.96 * se, y_hat + 1.96 * se
 
     if nombre_modelo == "Naive":
         s = modelo.get("s", 0.0)

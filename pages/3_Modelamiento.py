@@ -1,14 +1,32 @@
 import plotly.graph_objects as go
 import streamlit as st
-
+import pandas as pd
 from Core.datos import serie_temporal, serie_area_agua
-from Core.gee_init import asegurar_zona_estudio, asegurar_rio_chili
 from Core.indices import INDICES
 from Core.prediccion import predecir_serie
 
-# ── Contexto ─────────────────────────────────────────────────────────────────
-zona_estudio = asegurar_zona_estudio()
-rio_chili = asegurar_rio_chili()
+# ── Configuración del horizonte de proyección ───────────────────────────────
+ANIOS_FUTUROS = (2026, 2027, 2028, 2029, 2030)
+
+@st.cache_data(show_spinner=False)
+def _obtener_prediccion_agua(anios_futuros: tuple = ANIOS_FUTUROS):
+    serie_agua = serie_area_agua()
+    return predecir_serie(
+        serie_agua,
+        campo_valor="Área_km2",
+        campo_anio="Año",
+        anios_futuros=anios_futuros,
+    )
+
+@st.cache_data(show_spinner=False)
+def _obtener_prediccion_indice(indice_sel: str, anios_futuros: tuple = ANIOS_FUTUROS):
+    serie = serie_temporal(indice_sel)
+    return predecir_serie(
+        serie,
+        campo_valor="Valor",
+        campo_anio="Año",
+        anios_futuros=anios_futuros,
+    )
 
 # ── Interfaz – sidebar ───────────────────────────────────────────────────────
 st.title("Modelamiento y Predicción – Calidad del Agua")
@@ -25,13 +43,7 @@ tab_agua, tab_comparacion = st.tabs([
 with tab_agua:
     st.subheader("Evolución y predicción de la superficie de agua (km²)")
     try:
-        serie_agua = serie_area_agua()
-        pred_agua = predecir_serie(
-            serie_agua,
-            campo_valor="Área_km2",
-            campo_anio="Año",
-            anios_futuros=(2026, 2027, 2028, 2029,2030),
-        )
+        pred_agua = _obtener_prediccion_agua(ANIOS_FUTUROS)
 
         if pred_agua["historico"]:
             anios_a_hist = [d["Año"] for d in pred_agua["historico"]]
@@ -68,7 +80,7 @@ with tab_agua:
                             x=anios_a_banda + anios_a_banda[::-1],
                             y=max_a_banda + min_a_banda[::-1],
                             fill="toself",
-                            fillcolor="rgba(2, 136, 209, 0.2)",
+                            fillcolor="rgba(255, 127, 14, 0.2)",
                             line=dict(color="rgba(255,255,255,0)"),
                             name="Intervalo incertidumbre (95%)",
                         )
@@ -79,7 +91,7 @@ with tab_agua:
                         x=anios_ap,
                         y=vals_ap,
                         mode="lines+markers",
-                        name="Área proyectada (2026–2028)",
+                        name=f"Área proyectada ({preds_a[0]['Año']}–{preds_a[-1]['Año']})",
                         line=dict(color="#e65100", width=2.5, dash="dash"),
                         marker=dict(size=7, symbol="diamond"),
                     )
@@ -104,6 +116,14 @@ with tab_agua:
                     line_width=0,
                 )
 
+                fig_agua.add_vrect(
+                    x0=anios_a_hist[-1] + 0.5,
+                    x1=preds_a[-1]["Año"] + 0.5,
+                    fillcolor="rgba(255, 127, 14, 0.12)",
+                    layer="below",
+                    line_width=0,
+                )
+
             fig_agua.update_layout(
                 xaxis=dict(title="Año", dtick=2),
                 yaxis=dict(title="Superficie de agua (km²)"),
@@ -112,6 +132,42 @@ with tab_agua:
                 margin=dict(l=20, r=20, t=30, b=20),
             )
             st.plotly_chart(fig_agua, use_container_width=True)
+
+            with st.expander("📊 Ver datos históricos y proyección de superficie de agua"):
+                datos_agua = [
+                    {
+                        "Año": d["Año"],
+                        "Tipo": "Observado",
+                        "Superficie (km²)": d["Valor"],
+                        "Límite inferior 95%": None,
+                        "Límite superior 95%": None,
+                    }
+                    for d in pred_agua["historico"]
+                ]
+
+                if pred_agua["valido"] and preds_a:
+                    datos_agua.extend([
+                        {
+                            "Año": p["Año"],
+                            "Tipo": "Predicción",
+                            "Superficie (km²)": p["Valor"],
+                            "Límite inferior 95%": p.get("Min"),
+                            "Límite superior 95%": p.get("Max"),
+                        }
+                        for p in preds_a
+                    ])
+
+                df_agua = pd.DataFrame(datos_agua)
+                st.dataframe(
+                    df_agua.round(4),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                st.caption(
+                    "Los intervalos de incertidumbre corresponden únicamente "
+                    "a las predicciones y se muestran cuando están disponibles."
+                )
 
             if pred_agua["valido"] and metricas_a.get("MAE") is not None:
                 st.caption(
@@ -160,13 +216,7 @@ with tab_agua:
 with tab_comparacion:
     st.subheader(f"Comparación histórica vs. predicha – {indice}")
 
-    serie = serie_temporal(indice)
-    pred_res = predecir_serie(
-        serie,
-        campo_valor="Valor",
-        campo_anio="Año",
-        anios_futuros=(2026, 2027, 2028, 2029, 2030),
-    )
+    pred_res = _obtener_prediccion_indice(indice, ANIOS_FUTUROS)
     completos = pred_res["historico"]
     preds = pred_res["predicciones"]
     metricas = pred_res["metricas"]
@@ -217,7 +267,7 @@ with tab_comparacion:
                 x=[anio_ref] + [p["Año"] for p in preds],
                 y=[val_ref] + [p["Valor"] for p in preds],
                 mode="lines+markers",
-                name="Predicción (2026–2028)",
+                name=f"Predicción ({preds[0]['Año']}–{preds[-1]['Año']})",
                 line=dict(color="#ff7f0e", width=2.5, dash="dash"),
                 marker=dict(size=8, symbol="diamond"),
             )
@@ -297,9 +347,10 @@ with tab_comparacion:
             tendencia_txt = "comportamiento aproximadamente estable"
             dinamica_txt = "variaciones mínimas cercanas al promedio histórico"
 
-        val_2028 = preds[-1]["Valor"]
-        min_2028 = preds[-1]["Min"]
-        max_2028 = preds[-1]["Max"]
+        anio_fin = preds[-1]["Año"]
+        val_fin = preds[-1]["Valor"]
+        min_fin = preds[-1]["Min"]
+        max_fin = preds[-1]["Max"]
 
         col_met1, col_met2, col_met3 = st.columns(3)
         with col_met1:
@@ -308,12 +359,12 @@ with tab_comparacion:
                 value=f"{val_ref:.4f}",
             )
         with col_met2:
-            dif_2028 = val_2028 - val_ref
-            pct_2028 = (dif_2028 / abs(val_ref) * 100) if abs(val_ref) > 1e-4 else 0.0
+            dif_fin = val_fin - val_ref
+            pct_fin = (dif_fin / abs(val_ref) * 100) if abs(val_ref) > 1e-4 else 0.0
             st.metric(
-                label="Proyección final (2028)",
-                value=f"{val_2028:.4f}",
-                delta=f"{dif_2028:+.4f} ({pct_2028:+.1f}%)" if abs(val_ref) > 1e-4 else f"{dif_2028:+.4f}",
+                label=f"Proyección final ({anio_fin})",
+                value=f"{val_fin:.4f}",
+                delta=f"{dif_fin:+.4f} ({pct_fin:+.1f}%)" if abs(val_ref) > 1e-4 else f"{dif_fin:+.4f}",
             )
         with col_met3:
             st.metric(
@@ -327,8 +378,8 @@ with tab_comparacion:
         rmse_str = f"{metricas.get('RMSE'):.5f}" if metricas.get('RMSE') is not None else "N/D"
         modelo_sel = metricas.get('Modelo', 'N/D')
 
-        if min_2028 is not None and max_2028 is not None:
-            incertidumbre_txt = f"El intervalo al 95% para 2028 se sitúa entre `{min_2028:.4f}` y `{max_2028:.4f}`."
+        if min_fin is not None and max_fin is not None:
+            incertidumbre_txt = f"El intervalo al 95% para {anio_fin} se sitúa entre `{min_fin:.4f}` y `{max_fin:.4f}`."
         else:
             incertidumbre_txt = "Intervalo analítico no aplicable para el modelo seleccionado."
 
@@ -336,7 +387,7 @@ with tab_comparacion:
             f"""
             **Interpretación de la proyección:**
             - **Comportamiento histórico:** La serie observada (2000–{anio_ref}) presenta una {tendencia_txt}, con una tasa media de `{m_anual:+.5f}` por año.
-            - **Comportamiento proyectado:** Para el periodo 2026–2028, el modelo **{modelo_sel}** proyecta la continuidad de este comportamiento, estimando {dinamica_txt} hasta alcanzar `{val_2028:.4f}` en 2028.
+            - **Comportamiento proyectado:** Para el periodo {preds[0]['Año']}–{anio_fin}, el modelo **{modelo_sel}** proyecta la continuidad de este comportamiento, estimando {dinamica_txt} hasta alcanzar `{val_fin:.4f}` en {anio_fin}.
             - **Nivel de incertidumbre:** {incertidumbre_txt}
             - **Evaluación del ajuste:** MAE = `{mae_str}`, RMSE = `{rmse_str}`, R² = `{r2_str}`.
 

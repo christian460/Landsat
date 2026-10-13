@@ -10,3 +10,6 @@ name = "Exploración"
 path = "pages/2_Analisis.py"
 name = "Análisis"
 
+[[pages]]
+path = "pages/3_Modelamiento.py"
+name = "Modelamiento"

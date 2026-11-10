@@ -15,7 +15,6 @@ except ImportError:
     HAS_SKLEARN = False
 
 try:
-   
     from xgboost import XGBRegressor
     HAS_XGBOOST = True
 except ImportError:
@@ -53,10 +52,10 @@ def predecir_serie(
     anios = np.array([d["Año"] for d in datos], dtype=float)
     vals = np.array([d["Valor"] for d in datos], dtype=float)
 
-    # 2. Configurar validación rolling-origin (k ventanas)
+    # 2. Configurar validación rolling-origin (k ventanas cronológicas)
     k = max(2, min(anios_test, n // 3))
 
-    # 3. Evaluar los 8 modelos
+    # 3. Evaluar los 8 modelos con validación Walk-Forward multi-paso
     evaluaciones = []
     definiciones_modelos = _obtener_definiciones_modelos()
 
@@ -68,7 +67,8 @@ def predecir_serie(
                 k=k,
                 es_ml=es_ml,
                 fn_entrenar=fn_entrenar,
-                fn_predecir_step=fn_predecir_step
+                fn_predecir_step=fn_predecir_step,
+                horizonte_max=min(3, len(anios_futuros)),
             )
             evaluaciones.append({
                 "Modelo": nombre,
@@ -76,6 +76,7 @@ def predecir_serie(
                 "RMSE": round(res_val["RMSE"], 5),
                 "R2": round(res_val["R2"], 4) if res_val["R2"] is not None else None,
                 "Splits": res_val["Splits"],
+                "s_val": res_val.get("s_val", res_val["RMSE"]),
                 "Disponible": True
             })
         except Exception as err:
@@ -85,6 +86,7 @@ def predecir_serie(
                 "RMSE": None,
                 "R2": None,
                 "Splits": 0,
+                "s_val": None,
                 "Disponible": False,
                 "Detalle": str(err)
             })
@@ -99,6 +101,7 @@ def predecir_serie(
     disponibles.sort(key=lambda m: (m["MAE"], m["RMSE"] if m["RMSE"] is not None else 1e9))
     mejor_modelo_info = disponibles[0]
     mejor_nombre = mejor_modelo_info["Modelo"]
+    s_val_sel = mejor_modelo_info.get("s_val", mejor_modelo_info["RMSE"])
 
     # 5. Reentrenamiento del modelo seleccionado con TODA la serie histórica (2000–2025)
     def_sel = next(d for d in definiciones_modelos if d[0] == mejor_nombre)
@@ -107,17 +110,35 @@ def predecir_serie(
     # Entrenamiento con todos los datos
     modelo_final = fn_entrenar_sel(anios, vals)
 
-    # 6. Predicción recursiva 2026–2028
+    # 6. Predicción recursiva hacia el horizonte futuro
     predicciones = []
     anios_hist_list = anios.tolist()
     vals_hist_list = vals.tolist()
+    ultimo_anio_hist = float(anios[-1])
+    es_superficie_agua = ("área" in campo_valor.lower() or "area" in campo_valor.lower())
 
     for anio_fut in anios_futuros:
         y_hat = fn_predecir_sel(modelo_final, anios_hist_list, vals_hist_list, float(anio_fut))
         y_hat_val = float(y_hat)
 
-        # Intervalos de incertidumbre
-        min_val, max_val = _calcular_intervalos(mejor_nombre, modelo_final, anios_hist_list, vals_hist_list, float(anio_fut), y_hat_val)
+        # Restricción física: superficie de agua no puede ser negativa
+        if es_superficie_agua:
+            y_hat_val = max(0.0, y_hat_val)
+
+        # Intervalos de incertidumbre con escala por horizonte
+        min_val, max_val = _calcular_intervalos(
+            mejor_nombre,
+            modelo_final,
+            anios_hist_list,
+            vals_hist_list,
+            float(anio_fut),
+            y_hat_val,
+            ultimo_anio=ultimo_anio_hist,
+            s_val=s_val_sel,
+        )
+
+        if es_superficie_agua and min_val is not None:
+            min_val = max(0.0, min_val)
 
         predicciones.append({
             "Año": int(anio_fut),
@@ -126,7 +147,7 @@ def predecir_serie(
             "Max": round(max_val, 4) if max_val is not None else None,
         })
 
-        # Para modelos autoregresivos (lags), incorporar la predicción al historial
+        # Para modelos autorregresivos (lags), incorporar la predicción al historial recursivo
         anios_hist_list.append(float(anio_fut))
         vals_hist_list.append(y_hat_val)
 
@@ -154,9 +175,9 @@ def predecir_serie(
         },
         "modelos_evaluados": evaluaciones,
         "mensaje_seleccion": (
-            f"Se evaluaron {len(evaluaciones)} modelos mediante validación rolling-origin ({k} splits temporales). "
-            f"El modelo **{mejor_nombre}** obtuvo el menor MAE ({mae_sel:.5f}, RMSE = {rmse_sel:.5f}) "
-            f"y fue seleccionado automáticamente para proyectar el periodo {anios_futuros[0]}–{anios_futuros[-1]}."
+            f"Se evaluaron {len(evaluaciones)} modelos mediante validación walk-forward temporal multi-paso ({k} ventanas). "
+            f"El modelo **{mejor_nombre}** obtuvo el menor error fuera de muestra (MAE = {mae_sel:.5f}, RMSE = {rmse_sel:.5f}) "
+            f"y fue seleccionado para proyectar el periodo {anios_futuros[0]}–{anios_futuros[-1]}."
         ),
     }
 
@@ -201,11 +222,14 @@ def calcular_anomalias_proyectadas(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GENERACIÓN DE CARACTERÍSTICAS (FEATURES) TEMPORALES PARA ML (RF/XGB)
+# GENERACIÓN DE CARACTERÍSTICAS (FEATURES) AUTORREGRESIVAS (SIN COORDENADA TEMPORAL NO ESTACIONARIA)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _crear_dataset_lags(anios: np.ndarray, vals: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-
+    """
+    Construye características autorregresivas puras [lag1, lag2, roll3] sin la variable año calendario.
+    Evita la fuga de información de particionamiento ortogonal extremo en árboles de decisión.
+    """
     n = len(vals)
     if n < 4:
         raise ValueError("Se requieren al menos 4 observaciones para construir lags.")
@@ -213,22 +237,21 @@ def _crear_dataset_lags(anios: np.ndarray, vals: np.ndarray) -> Tuple[np.ndarray
     X = []
     y = []
     for i in range(3, n):
-        anio_i = anios[i]
         lag1 = vals[i - 1]
         lag2 = vals[i - 2]
         roll3 = (vals[i - 1] + vals[i - 2] + vals[i - 3]) / 3.0
-        X.append([anio_i, lag1, lag2, roll3])
+        X.append([lag1, lag2, roll3])
         y.append(vals[i])
 
     return np.array(X, dtype=float), np.array(y, dtype=float)
 
 
 def _crear_vector_features_paso(anios_hist: List[float], vals_hist: List[float], anio_target: float) -> np.ndarray:
-
+    """Vector de características autorregresivas para predicción recursiva a un paso adelante."""
     lag1 = vals_hist[-1]
     lag2 = vals_hist[-2]
     roll3 = (vals_hist[-1] + vals_hist[-2] + vals_hist[-3]) / 3.0
-    return np.array([[anio_target, lag1, lag2, roll3]], dtype=float)
+    return np.array([[lag1, lag2, roll3]], dtype=float)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,7 +262,7 @@ def _crear_vector_features_paso(anios_hist: List[float], vals_hist: List[float],
 def _naive_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
     residuos = np.diff(vals) if len(vals) > 1 else np.array([0.0])
     s = float(np.std(residuos)) if len(residuos) else float(np.std(vals))
-    return {"last_val": float(vals[-1]), "s": s, "n": len(vals)}
+    return {"last_val": float(vals[-1]), "s": s, "n": len(vals), "ultimo_anio": float(anios[-1])}
 
 def _naive_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: List[float], anio_target: float) -> float:
     return float(vals_hist[-1])
@@ -252,7 +275,7 @@ def _lineal_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
     s = float(np.std(residuos, ddof=2)) if len(vals) > 2 else float(np.std(residuos))
     mx = float(np.mean(anios))
     ssx = float(np.sum((anios - mx) ** 2))
-    return {"m": m, "b": b, "s": s, "n": len(vals), "mean_x": mx, "ssx": ssx}
+    return {"m": m, "b": b, "s": s, "n": len(vals), "mean_x": mx, "ssx": ssx, "ultimo_anio": float(anios[-1])}
 
 def _lineal_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: List[float], anio_target: float) -> float:
     return float(modelo["m"] * anio_target + modelo["b"])
@@ -265,14 +288,14 @@ def _poly2_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
     coeffs = np.polyfit(t, vals, 2)
     residuos = vals - np.polyval(coeffs, t)
     s = float(np.std(residuos, ddof=3)) if len(vals) > 3 else float(np.std(residuos))
-    return {"coeffs": coeffs.tolist(), "x0": x0, "s": s, "n": len(vals)}
+    return {"coeffs": coeffs.tolist(), "x0": x0, "s": s, "n": len(vals), "ultimo_anio": float(anios[-1])}
 
 def _poly2_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: List[float], anio_target: float) -> float:
     t = anio_target - modelo["x0"]
     return float(np.polyval(modelo["coeffs"], t))
 
 
-# 4. Holt (Suavizado Exponencial Lineal)
+# 4. Holt (Suavizado Exponencial Lineal - Nivel y Tendencia sin estacionalidad)
 def _holt_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
     best = {"alpha": 0.3, "beta": 0.1, "mse": float("inf")}
     for alpha in np.linspace(0.05, 0.95, 10):
@@ -307,7 +330,7 @@ def _holt_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: Li
     return float(modelo["L"] + h * modelo["B"])
 
 
-# 5. ARIMA(1,1,0)
+# 5. ARIMA(1,1,0) (AR(1) en primeras diferencias)
 def _arima_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
     if len(vals) < 5:
         raise ValueError("ARIMA requiere al menos 5 observaciones.")
@@ -328,7 +351,7 @@ def _arima_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
     }
 
 def _arima_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: List[float], anio_target: float) -> float:
-    h = int(anio_target - modelo["ultimo_anio"])
+    h = int(round(anio_target - modelo["ultimo_anio"]))
     phi = modelo["phi"]
     val = modelo["last_val"]
     d_prev = modelo["last_diff"]
@@ -339,45 +362,63 @@ def _arima_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: L
     return float(val)
 
 
-# 6. SVR con kernel RBF (con StandardScaler dentro del pipeline)
+# 6. SVR con kernel RBF (Reformulado con dinámica autorregresiva sobre rezagos)
 def _svr_rbf_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
+    X, y = _crear_dataset_lags(anios, vals)
+    if len(y) < 5:
+        raise ValueError("Observaciones insuficientes para SVR con lags.")
+
     if HAS_SKLEARN:
-        pipe = make_pipeline(StandardScaler(), SklearnSVR(kernel="rbf", C=1.0, epsilon=0.01))
-        pipe.fit(anios.reshape(-1, 1), vals)
-        residuos = vals - pipe.predict(anios.reshape(-1, 1))
+        pipe = make_pipeline(StandardScaler(), SklearnSVR(kernel="rbf", C=2.0, epsilon=0.01, gamma="scale"))
+        pipe.fit(X, y)
+        residuos = y - pipe.predict(X)
         s = float(np.std(residuos))
-        return {"tipo": "sklearn", "modelo": pipe, "s": s, "n": len(vals)}
+        return {"tipo": "sklearn", "modelo": pipe, "s": s, "n": len(y), "ultimo_anio": float(anios[-1])}
     else:
-        # Implementación de Ridge RBF con escalado estandarizado propio
-        mu_x, std_x = float(np.mean(anios)), float(np.std(anios)) if np.std(anios) > 0 else 1.0
-        mu_y, std_y = float(np.mean(vals)), float(np.std(vals)) if np.std(vals) > 0 else 1.0
-        x_norm = (anios - mu_x) / std_x
-        y_norm = (vals - mu_y) / std_y
+        # Implementación propia Kernel Ridge RBF autorregresiva con escalado estandarizado
+        mu_X = np.mean(X, axis=0)
+        std_X = np.std(X, axis=0)
+        std_X[std_X == 0] = 1.0
+
+        mu_y = float(np.mean(y))
+        std_y = float(np.std(y)) if np.std(y) > 0 else 1.0
+
+        X_norm = (X - mu_X) / std_X
+        y_norm = (y - mu_y) / std_y
         gamma = 0.5
-        K = np.exp(-gamma * (x_norm[:, None] - x_norm[None, :]) ** 2)
-        lam = 0.05
-        alpha = np.linalg.solve(K + lam * np.eye(len(vals)), y_norm)
+        dists = np.sum((X_norm[:, None, :] - X_norm[None, :, :]) ** 2, axis=-1)
+        K = np.exp(-gamma * dists)
+        lam = 0.1
+        alpha = np.linalg.solve(K + lam * np.eye(len(y)), y_norm)
+
         pred_norm = K @ alpha
         pred_raw = pred_norm * std_y + mu_y
-        s = float(np.std(vals - pred_raw))
+        s = float(np.std(y - pred_raw))
         return {
             "tipo": "custom",
             "alpha": alpha.tolist(),
-            "x_norm": x_norm.tolist(),
-            "mu_x": mu_x, "std_x": std_x,
-            "mu_y": mu_y, "std_y": std_y,
+            "X_norm": X_norm.tolist(),
+            "mu_X": mu_X.tolist(),
+            "std_X": std_X.tolist(),
+            "mu_y": mu_y,
+            "std_y": std_y,
             "gamma": gamma,
             "s": s,
-            "n": len(vals)
+            "n": len(y),
+            "ultimo_anio": float(anios[-1]),
         }
 
 def _svr_rbf_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: List[float], anio_target: float) -> float:
+    x_feat = _crear_vector_features_paso(anios_hist, vals_hist, anio_target)
     if modelo.get("tipo") == "sklearn":
-        return float(modelo["modelo"].predict(np.array([[anio_target]]))[0])
+        return float(modelo["modelo"].predict(x_feat)[0])
     else:
-        x_target_norm = (anio_target - modelo["mu_x"]) / modelo["std_x"]
-        x_norm_arr = np.array(modelo["x_norm"])
-        k = np.exp(-modelo["gamma"] * (x_norm_arr - x_target_norm) ** 2)
+        mu_X = np.array(modelo["mu_X"])
+        std_X = np.array(modelo["std_X"])
+        x_norm_arr = np.array(modelo["X_norm"])
+        feat_norm = (x_feat - mu_X) / std_X
+        dists = np.sum((x_norm_arr - feat_norm) ** 2, axis=-1)
+        k = np.exp(-modelo["gamma"] * dists)
         y_norm_hat = float(np.dot(modelo["alpha"], k))
         return float(y_norm_hat * modelo["std_y"] + modelo["mu_y"])
 
@@ -385,7 +426,7 @@ def _svr_rbf_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist:
 # 7. Random Forest Regressor
 class _NumpyRandomForestRegressor:
     """Implementación pura en NumPy para Random Forest si sklearn no está disponible."""
-    def __init__(self, n_estimators=50, max_depth=2, min_samples_split=4, min_samples_leaf=3, random_state=42):
+    def __init__(self, n_estimators=30, max_depth=2, min_samples_split=3, min_samples_leaf=2, random_state=42):
         self.n_estimators = n_estimators
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
@@ -409,8 +450,7 @@ class _NumpyRandomForestRegressor:
         best_score = float("inf")
         best_split = None
         n_feat = X.shape[1]
-        k_feat = max(1, int(math.sqrt(n_feat)))
-        features = rng.choice(n_feat, size=k_feat, replace=False)
+        features = list(range(n_feat))
 
         for f in features:
             thresholds = np.unique(X[:, f])
@@ -455,29 +495,27 @@ def _rf_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
 
     if HAS_SKLEARN:
         modelo = SklearnRF(
-            n_estimators=50,
+            n_estimators=30,
             max_depth=2,
-            min_samples_split=4,
-            min_samples_leaf=3,
-            max_features="sqrt",
+            min_samples_split=3,
+            min_samples_leaf=2,
+            max_features=None,
             random_state=42
         )
     else:
         modelo = _NumpyRandomForestRegressor(
-            n_estimators=50,
+            n_estimators=30,
             max_depth=2,
-            min_samples_split=4,
-            min_samples_leaf=3,
+            min_samples_split=3,
+            min_samples_leaf=2,
             random_state=42
         )
 
     modelo.fit(X, y)
-    # Compute residual standard deviation and sample size for confidence intervals
-    preds = modelo.predict(X) if not HAS_SKLEARN else modelo.predict(X)
+    preds = modelo.predict(X)
     residuals = y - preds
     s = float(np.std(residuals)) if residuals.size > 0 else 0.0
-    n = len(y)
-    return {"modelo": modelo, "s": s, "n": n}
+    return {"modelo": modelo, "s": s, "n": len(y), "ultimo_anio": float(anios[-1])}
 
 def _rf_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: List[float], anio_target: float) -> float:
     x_feat = _crear_vector_features_paso(anios_hist, vals_hist, anio_target)
@@ -490,13 +528,13 @@ class _NumpyXGBoostRegressor:
     """Implementación de Gradient Boosted Trees tipo XGBoost pura en NumPy."""
     def __init__(
         self,
-        n_estimators=30,
+        n_estimators=25,
         max_depth=2,
-        learning_rate=0.05,
-        min_child_weight=3,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.5,
+        learning_rate=0.1,
+        min_child_weight=2,
+        subsample=0.85,
+        colsample_bytree=1.0,
+        reg_alpha=0.0,
         reg_lambda=1.0,
         random_state=42
     ):
@@ -523,8 +561,7 @@ class _NumpyXGBoostRegressor:
             residuals = y - y_hat
             sample_size = max(4, int(self.subsample * n_samples))
             sample_idx = rng.choice(n_samples, size=sample_size, replace=False)
-            feat_size = max(1, int(self.colsample_bytree * n_features))
-            feat_idx = rng.choice(n_features, size=feat_size, replace=False)
+            feat_idx = np.arange(n_features)
 
             tree = self._build_tree(
                 X[sample_idx],
@@ -538,13 +575,16 @@ class _NumpyXGBoostRegressor:
             y_hat += self.learning_rate * step_preds
 
     def _build_tree(self, X: np.ndarray, residuals: np.ndarray, depth: int, feat_idx: np.ndarray, rng: np.random.RandomState):
-        G = np.sum(residuals)
-        H = len(residuals)
+        G = float(np.sum(residuals))
+        H = float(len(residuals))
 
-        if abs(G) < self.reg_alpha:
-            leaf_weight = 0.0
+        if self.reg_alpha > 0:
+            if abs(G) < self.reg_alpha:
+                leaf_weight = 0.0
+            else:
+                leaf_weight = float(np.sign(G) * (abs(G) - self.reg_alpha) / (H + self.reg_lambda))
         else:
-            leaf_weight = float(np.sign(G) * (abs(G) - self.reg_alpha) / (H + self.reg_lambda))
+            leaf_weight = float(G / (H + self.reg_lambda))
 
         if depth >= self.max_depth or H < self.min_child_weight:
             return {"leaf": True, "value": leaf_weight}
@@ -563,8 +603,8 @@ class _NumpyXGBoostRegressor:
                 if n_left < max(1, self.min_child_weight) or n_right < max(1, self.min_child_weight):
                     continue
 
-                G_L, H_L = np.sum(residuals[left_mask]), n_left
-                G_R, H_R = np.sum(residuals[right_mask]), n_right
+                G_L, H_L = float(np.sum(residuals[left_mask])), float(n_left)
+                G_R, H_R = float(np.sum(residuals[right_mask])), float(n_right)
 
                 gain = 0.5 * (
                     (G_L ** 2) / (H_L + self.reg_lambda) +
@@ -606,37 +646,35 @@ def _xgboost_train(anios: np.ndarray, vals: np.ndarray) -> Dict[str, Any]:
 
     if HAS_XGBOOST and HAS_SKLEARN:
         modelo = XGBRegressor(
-            n_estimators=30,
+            n_estimators=25,
             max_depth=2,
-            learning_rate=0.05,
-            min_child_weight=3,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            reg_alpha=0.5,
+            learning_rate=0.1,
+            min_child_weight=2,
+            subsample=0.85,
+            colsample_bytree=1.0,
+            reg_alpha=0.0,
             reg_lambda=1.0,
             random_state=42,
             objective="reg:squarederror"
         )
     else:
         modelo = _NumpyXGBoostRegressor(
-            n_estimators=30,
+            n_estimators=25,
             max_depth=2,
-            learning_rate=0.05,
-            min_child_weight=3,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            reg_alpha=0.5,
+            learning_rate=0.1,
+            min_child_weight=2,
+            subsample=0.85,
+            colsample_bytree=1.0,
+            reg_alpha=0.0,
             reg_lambda=1.0,
             random_state=42
         )
 
     modelo.fit(X, y)
-    # Compute residual standard deviation and sample size for confidence intervals
     preds = modelo.predict(X)
     residuals = y - preds
     s = float(np.std(residuals)) if residuals.size > 0 else 0.0
-    n = len(y)
-    return {"modelo": modelo, "s": s, "n": n}
+    return {"modelo": modelo, "s": s, "n": len(y), "ultimo_anio": float(anios[-1])}
 
 def _xgboost_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist: List[float], anio_target: float) -> float:
     x_feat = _crear_vector_features_paso(anios_hist, vals_hist, anio_target)
@@ -649,21 +687,20 @@ def _xgboost_predict(modelo: Dict[str, Any], anios_hist: List[float], vals_hist:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _obtener_definiciones_modelos():
-
     return [
         ("Naive", False, _naive_train, _naive_predict),
         ("Regresión Lineal", False, _lineal_train, _lineal_predict),
         ("Regresión Polinómica grado 2", False, _poly2_train, _poly2_predict),
         ("Holt", False, _holt_train, _holt_predict),
         ("ARIMA(1,1,0)", False, _arima_train, _arima_predict),
-        ("SVR con kernel RBF", False, _svr_rbf_train, _svr_rbf_predict),
+        ("SVR con kernel RBF", True, _svr_rbf_train, _svr_rbf_predict),
         ("Random Forest Regressor", True, _rf_train, _rf_predict),
         ("XGBoost Regressor", True, _xgboost_train, _xgboost_predict),
     ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# VALIDACIÓN TEMPORAL (ROLLING-ORIGIN / EXPANDING WINDOW)
+# VALIDACIÓN TEMPORAL (ROLLING-ORIGIN / EXPANDING WINDOW WALK-FORWARD MULTI-PASO)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _validar_rolling(
@@ -673,12 +710,22 @@ def _validar_rolling(
     es_ml: bool,
     fn_entrenar: Any,
     fn_predecir_step: Any,
+    horizonte_max: int = 3,
 ) -> Dict[str, Any]:
-
+    """
+    Validación Walk-Forward (Rolling-Origin) multi-paso.
+    Para cada origen temporal, el modelo se entrena únicamente con observaciones pasadas
+    y proyecta recursivamente h pasos (h=1..horizonte_max) sobre las observaciones reales no vistas.
+    """
     n = len(anios)
     errores = []
     reales = []
     splits_validos = 0
+
+    # Benchmark histórico de referencia (media de datos previos a la ventana de evaluación)
+    base_split = n - k
+    media_benchmark = float(np.mean(vals[:base_split])) if base_split > 0 else float(np.mean(vals))
+    ss_bench = 0.0
 
     for i in range(k):
         idx_split = n - k + i
@@ -688,40 +735,59 @@ def _validar_rolling(
 
         anios_tr = anios[:idx_split]
         vals_tr = vals[:idx_split]
-        x_test = float(anios[idx_split])
-        y_test = float(vals[idx_split])
 
         modelo = fn_entrenar(anios_tr, vals_tr)
-        y_hat = fn_predecir_step(modelo, anios_tr.tolist(), vals_tr.tolist(), x_test)
 
-        errores.append(float(y_hat) - y_test)
-        reales.append(y_test)
+        # Proyección recursiva multi-paso acorde al horizonte real de pronóstico
+        h_pasos = min(horizonte_max, n - idx_split)
+        anios_eval = anios_tr.tolist()
+        vals_eval = vals_tr.tolist()
+
+        for step in range(h_pasos):
+            target_idx = idx_split + step
+            x_target = float(anios[target_idx])
+            y_real = float(vals[target_idx])
+
+            y_hat = float(fn_predecir_step(modelo, anios_eval, vals_eval, x_target))
+
+            err = y_hat - y_real
+            errores.append(err)
+            reales.append(y_real)
+            ss_bench += (y_real - media_benchmark) ** 2
+
+            anios_eval.append(x_target)
+            vals_eval.append(y_hat)
+
         splits_validos += 1
 
-    if splits_validos == 0:
+    if splits_validos == 0 or len(errores) == 0:
         raise ValueError("No hubo suficientes observaciones para completar splits válidos.")
 
-    errs_arr = np.array(errores)
-    real_arr = np.array(reales)
+    errs_arr = np.array(errores, dtype=float)
+    real_arr = np.array(reales, dtype=float)
 
     mae = float(np.mean(np.abs(errs_arr)))
     rmse = float(np.sqrt(np.mean(errs_arr ** 2)))
 
-    media_real = float(np.mean(real_arr))
-    ss_tot = float(np.sum((real_arr - media_real) ** 2))
+    # R² Out-Of-Sample (Campbell & Thompson, 2008) relativo al benchmark histórico
     ss_res = float(np.sum(errs_arr ** 2))
-    r2 = (1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else None
+    if ss_bench > 1e-12:
+        r2 = 1.0 - (ss_res / ss_bench)
+    else:
+        var_real = float(np.sum((real_arr - np.mean(real_arr)) ** 2))
+        r2 = (1.0 - ss_res / var_real) if var_real > 1e-12 else None
 
     return {
         "MAE": mae,
         "RMSE": rmse,
         "R2": r2,
         "Splits": splits_validos,
+        "s_val": rmse,
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# INTERVALOS DE INCERTIDUMBRE
+# INTERVALOS DE INCERTIDUMBRE (COBERTURA NOMINAL 95%)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _calcular_intervalos(
@@ -730,44 +796,40 @@ def _calcular_intervalos(
     anios_hist: List[float],
     vals_hist: List[float],
     anio_target: float,
-    y_hat: float
+    y_hat: float,
+    ultimo_anio: Optional[float] = None,
+    s_val: Optional[float] = None,
 ) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Calcula intervalos de predicción al 95 % con propagación de incertidumbre
+    por horizonte temporal h (SE_h = s * sqrt(h)) y usando el desvío out-of-sample real.
+    """
+    u_anio = ultimo_anio if ultimo_anio is not None else float(modelo.get("ultimo_anio", anios_hist[-1] if anios_hist else 2025.0))
+    h = max(1.0, anio_target - u_anio)
 
-    if nombre_modelo in ("Random Forest Regressor", "XGBoost Regressor", "SVR con kernel RBF"):
-        s = modelo.get("s", 0.0)
-        n = modelo.get("n", len(vals_hist))
-        se = s * math.sqrt(1.0 + 1.0 / n)
-        return y_hat - 1.96 * se, y_hat + 1.96 * se
-
-    if nombre_modelo == "Naive":
-        s = modelo.get("s", 0.0)
-        n = modelo.get("n", len(vals_hist))
-        se = s * math.sqrt(1.0 + 1.0 / n)
-        return y_hat - 1.96 * se, y_hat + 1.96 * se
+    # Base de dispersión de error out-of-sample honesta
+    s = s_val if (s_val is not None and s_val > 0) else modelo.get("s", 0.0)
 
     if nombre_modelo == "Regresión Lineal":
-        s = modelo["s"]
-        n = modelo["n"]
-        mx = modelo["mean_x"]
-        ssx = modelo["ssx"] if modelo["ssx"] > 0 else 1e-9
-        se = s * math.sqrt(1.0 + 1.0 / n + (anio_target - mx) ** 2 / ssx)
+        s_lin = modelo.get("s", s)
+        n = modelo.get("n", len(vals_hist))
+        mx = modelo.get("mean_x", float(np.mean(anios_hist)))
+        ssx = modelo.get("ssx", 1.0)
+        ssx = ssx if ssx > 0 else 1e-9
+        se = s_lin * math.sqrt(1.0 + 1.0 / n + (anio_target - mx) ** 2 / ssx)
         return y_hat - 1.96 * se, y_hat + 1.96 * se
 
-    if nombre_modelo == "Regresión Polinómica grado 2":
-        s = modelo["s"]
-        n = modelo["n"]
-        se = s * math.sqrt(1.0 + 1.0 / n)
-        return y_hat - 1.96 * se, y_hat + 1.96 * se
-
-    if nombre_modelo == "Holt":
-        s = modelo["s"]
-        h = max(1.0, anio_target - modelo["ultimo_anio"])
-        se = s * math.sqrt(h)
-        return y_hat - 1.96 * se, y_hat + 1.96 * se
-
-    if nombre_modelo == "ARIMA(1,1,0)":
-        s = modelo["s"]
-        h = max(1.0, anio_target - modelo["ultimo_anio"])
+    if nombre_modelo in (
+        "Naive",
+        "Holt",
+        "ARIMA(1,1,0)",
+        "Random Forest Regressor",
+        "XGBoost Regressor",
+        "SVR con kernel RBF",
+        "Regresión Polinómica grado 2"
+    ):
+        if s <= 0:
+            return None, None
         se = s * math.sqrt(h)
         return y_hat - 1.96 * se, y_hat + 1.96 * se
 
